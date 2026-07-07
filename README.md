@@ -1,5 +1,12 @@
    # trust-issues
 
+   ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
+   ![Tests](https://img.shields.io/badge/tests-75%20passing-brightgreen.svg)
+   ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
+   ![License](https://img.shields.io/badge/license-MIT-green.svg)
+
+   <sub>Code is licensed under **MIT** (see [`LICENSE`](LICENSE)). The *dataset* is CC BY 4.0 — see [`data/README.md`](data/README.md).</sub>
+
    **A loan risk model that did the boring parts right.**
 
    Most loan-risk projects make the same fatal mistakes — wrong target definition, data leakage,

@@ -6,33 +6,33 @@ code alone). Append new entries below; don't overwrite prior ones.
 
 ---
 
-## dti_n > 100 的 495 行:真实极端客户,非脏值
+## The 495 rows with dti_n > 100: real extreme customers, not dirty data
 
-**Date:** investigation run against the full real CSV, first time
+**Date:** investigation run against the full real CSV, the first time
 `validate_loan_data()` was wired into `load_raw()` (see `src/data_loader.py`).
 
 **Finding:** the original schema contract `(0 ≤ dti_n ≤ 100) OR (dti_n == 999)`
 rejected 495 real rows with `dti_n` strictly between 100.04 and 991.57 --
 neither in the real band nor the known missing-value sentinel.
 
-**Investigation, four pieces of evidence:**
-1. **违约率反证 (default-rate reversal):** the 495 rows have a 27.07% default
-   rate vs. 19.98% overall. If these were a decimal-shift artifact (i.e. the
-   true value is `dti_n / 100`), the corrected values would be the *lowest*
-   leverage in the dataset (median ~1.5% DTI), predicting a *below*-average
-   default rate -- the opposite of what's observed. This rules out the
-   decimal-shift hypothesis.
-2. **时间断层 (temporal cliff):** 0 rows in Train (2007-2014), 7 in 2015, 488
-   in 2016-2018. The near-total absence before 2016 and concentration after
+**Investigation — four pieces of evidence:**
+1. **Default-rate reversal:** the 495 rows have a 27.07% default rate vs.
+   19.98% overall. If these were a decimal-shift artifact (i.e. the true value
+   is `dti_n / 100`), the corrected values would be the *lowest* leverage in
+   the dataset (median ~1.5% DTI), predicting a *below*-average default rate --
+   the opposite of what's observed. This rules out the decimal-shift
+   hypothesis.
+2. **Temporal cliff:** 0 rows in Train (2007-2014), 7 in 2015, 488 in
+   2016-2018. The near-total absence before 2016 and concentration after
    points to a change in LendingClub's DTI computation/reporting methodology
    around 2015-2016, not to random data corruption.
-3. **非哨兵 (not sentinel/encoding residue):** 483 of 495 values are distinct,
+3. **Not a sentinel / encoding residue:** 483 of 495 values are distinct,
    continuously distributed from 100.04 to 991.57 at the same two-decimal
    precision as ordinary DTI. Sentinels cluster on a handful of reused, exact
    values (like -1 or 9999) -- this population doesn't.
-4. **特征画像 (feature profile):** median revenue $103k vs. $65k overall,
-   median loan_amnt $19.2k vs. $12k overall, FICO not depressed. Consistent
-   with a real subpopulation of high-income, high-loan-amount borrowers whose
+4. **Feature profile:** median revenue $103k vs. $65k overall, median
+   loan_amnt $19.2k vs. $12k overall, FICO not depressed. Consistent with a
+   real subpopulation of high-income, high-loan-amount borrowers whose
    reported DTI genuinely exceeds 100%, not with a noisy/garbage profile.
 
 **Verdict:** real extreme customers, most likely reflecting a genuine 2016+
@@ -44,11 +44,10 @@ not a decimal-point error.
 small margin). `DTI_SENTINEL = 999` is kept as a separate, explicit OR branch
 in the schema check even though it's now numerically redundant (999 ≤ 1000)
 -- it remains a distinct missing-value sentinel semantically, not a real DTI
-value, and merging it away would erase that meaning from the code. Values
-still keep no evidentiary basis beyond 1000 (e.g. a stray 9999) continue to
-be rejected.
+value, and merging it away would erase that meaning from the code. Values with
+no evidentiary basis beyond 1000 (e.g. a stray 9999) continue to be rejected.
 
-**待办 / TODO:**
+**TODO:**
 - `pipelines/drift_check.py` (not yet built) must monitor `dti_n`'s
   distribution by `issue_year`, not just its marginal range -- the 2016+
   regime is invisible to a check that only looks at the overall histogram,
@@ -86,43 +85,68 @@ separate concept from the tracking backend and still defaults to a local
 or a database -- only run *metadata* (params/metrics/tags) moved into
 `mlflow.db`. Both `mlflow.db` and `mlruns/` are gitignored.
 
-**待办 / TODO:** none currently; revisit if/when `pipelines/training_flow.py`
+**TODO:** none currently; revisit if/when `pipelines/training_flow.py`
 needs a shared (non-local) MLflow backend for multi-machine runs.
 
 ---
 
-## MLflow TODO: calibrate.py / fairness.py 指标未接入 mlflow
+## MLflow: calibrate.py / evaluate.py / fairness.py metrics — now unified in the pipeline
 
-**待办 / TODO:** calibrate.py 的 Brier/mean_pred 和 fairness/evaluate 的关键
-指标目前只打印到终端,未接入 mlflow。待 pipeline(Metaflow)阶段,把训练 AUC
-+ 校准 Brier + 评估指标统一记录到单次 mlflow run,形成一个模型的完整实验
-档案。
+**Original finding (pre-pipeline):** calibrate.py's Brier/mean_pred and the
+key metrics from evaluate/fairness were only printed to the terminal, not
+logged to MLflow. Only train.py logged runs, so a model's calibration and
+evaluation story lived in scrollback, not in a queryable archive.
+
+**Disposition (resolved in `pipelines/training_flow.py`):** the Metaflow
+pipeline now unifies all four stages' metrics into a **single**
+`lgbm_production` MLflow run (experiment `lc_default_risk`). The train step
+creates the run; the calibrate/evaluate/fairness steps reopen it by `run_id`
+and append their metrics, producing one complete experiment archive per model
+execution (24 metrics total: train/val/test AUC + PR-AUC, calibration Brier
+raw/cal, evaluation profit/approval/bad-rate, fairness AUC-with/no-state and
+cost). Zero `src/` changes — the logging lives entirely in the pipeline layer,
+which reads the metrics dicts the `src` functions already return.
+
+**TODO:** none currently.
 
 ---
 
-## 执行 fairness 结论:生产模型移除 addr_state
+## Executing the fairness conclusion: remove addr_state from the production model
 
-**审计证据摘要**(详见本文件上方 fairness 相关记录及 `src/fairness.py`
-module docstring):三层审计确认 `addr_state` 是数字红线捷径,而非真实经济
-差异的代理。Layer 3 消融(阈值 0.22):Mississippi 好客户 Equal Opportunity
-ratio,含州时 ~0.734~0.745,去州后 ~0.988~0.990;去州的 test AUC 代价仅
--0.0035~-0.0036(0.6689/0.6690 → 0.6654)。结论:生产模型移除 `addr_state`
-带来的 fairness 收益远大于其预测力贡献。
+**Audit evidence summary** (see the fairness-related records above and the
+`src/fairness.py` module docstring for detail): the three-layer audit confirms
+`addr_state` acts as a digital-redlining shortcut, not as a proxy for genuine
+economic differences. Layer 3 ablation (threshold 0.22): Mississippi's
+good-applicant Equal Opportunity ratio is ~0.734–0.745 with state included and
+~0.988–0.990 with state removed; the test-AUC cost of dropping state is only
+-0.0035 to -0.0036 (0.6689/0.6690 → 0.6654). Conclusion: removing `addr_state`
+from the production model yields a fairness benefit that far outweighs its
+predictive contribution.
 
-**实现方式:配置开关,非硬删。** `src/features.py` 新增模块级开关
-`INCLUDE_ADDR_STATE = False`(默认关闭,执行审计结论),`CATEGORICAL` 由
-`build_categorical(INCLUDE_ADDR_STATE)` 动态构成;`addr_state` 的列定义、
-`emp_order` 等特征工程逻辑原样保留。选择开关而非直接从代码里删掉
-`addr_state`,是为了保留复现能力:`build_categorical(True)` 仍能一键重建
-"含州"特征集,让 `fairness.py` 的 Layer 3 消融可以随时重新对比、重新验证,
-而不是只留一份写死在文档里的历史结论。`src/fairness.py` 的 Layer 3(
-`audit_layer3_ablation`)因此被重构为完全自包含:不再读取
-`features.py` 的(随开关变化的)`FEATURES`/`CATEGORICAL`,也不再依赖任何
-已加载的生产模型作为"含州"一侧的对比基准,而是用本模块自己的
-`FEATURES_WITH_STATE`/`FEATURES_NOSTATE` 常量,每次都从头训练两个变体
-——不论当前生产实际部署的是哪一个。
+This is framed as **geographic-proxy / digital-redlining risk, not a legal
+discrimination finding** — `addr_state` is not an ECOA-protected class; the
+audit surfaces a risk and its cost, it does not issue a legal determination.
 
-**重训后的新数字**(真实数据,`INCLUDE_ADDR_STATE=False`):
+**Implementation: a config switch, not a hard deletion.** `src/features.py`
+adds a module-level switch `INCLUDE_ADDR_STATE = False` (off by default,
+executing the audit conclusion); `CATEGORICAL` is built dynamically via
+`build_categorical(INCLUDE_ADDR_STATE)`, while `addr_state`'s column
+definition, `emp_order`, and the rest of the feature-engineering logic are
+kept intact. A switch was chosen over deleting `addr_state` from the code so
+that reproducibility is preserved: `build_categorical(True)` can still rebuild
+the "with-state" feature set on demand, letting `fairness.py`'s Layer 3
+ablation re-compare and re-verify at any time, rather than leaving only a
+hard-coded historical conclusion in a document.
+
+`src/fairness.py`'s Layer 3 (`audit_layer3_ablation`) was therefore refactored
+to be fully self-contained: it no longer reads `features.py`'s
+(switch-dependent) `FEATURES`/`CATEGORICAL`, nor does it rely on any loaded
+production model as the "with-state" comparison baseline. Instead it uses its
+own `FEATURES_WITH_STATE`/`FEATURES_NOSTATE` constants and trains both variants
+from scratch every time — regardless of which one is currently deployed to
+production.
+
+**New numbers after retraining** (real data, `INCLUDE_ADDR_STATE=False`):
 
 ```
 calibrate_model():
@@ -138,16 +162,20 @@ run_evaluation():
   Bad rate among approved:    18.9%
   Bad rate among rejected:    38.5%
 
-run_fairness_audit() Layer 1 (threshold=0.26): 全部州 verdict=clear,
-无一州 CI 完全低于 0.80(此前含州版本 MS 在更紧阈值下会被 Layer 2 揭示出
-持续低于 0.80 的问题;去州后 MS 在阈值 0.26 的 EO ratio 已升至 ~0.994)。
+run_fairness_audit() Layer 1 (threshold=0.26): all states verdict=clear,
+no state's CI falls entirely below 0.80 (the earlier with-state version had
+MS revealed by Layer 2 as persistently below 0.80 under tighter thresholds;
+after removing state, MS's EO ratio at threshold 0.26 has risen to ~0.994).
 ```
 
-**对照含州版本**(移除前的历史数字,供参考):test AUC 0.6689,阈值 0.26,
-改善 ≈ +$190.6M,批准率 80.3%,approved 坏账率 19.2%,rejected 坏账率
-39.6%。AUC 略降(-0.0035 附近)、改善金额略降(~$190.6M → ~$184.8M)、批
-准率略降(80.3% → 78.0%)都是预期且可接受的代价——这就是消除数字红线
-风险的价格,不是模型变差了。
+**Comparison with the with-state version** (pre-removal historical numbers,
+for reference): test AUC 0.6689, threshold 0.26, improvement ≈ +$190.6M,
+approval rate 80.3%, approved bad rate 19.2%, rejected bad rate 39.6%. The
+slight AUC drop (~-0.0035), the smaller improvement (~$190.6M → ~$184.8M), and
+the lower approval rate (80.3% → 78.0%) are all expected and acceptable costs
+— this is the price of eliminating digital-redlining risk, not the model
+getting worse.
 
-**待办 / TODO:** 无。若未来重新评估是否恢复 `addr_state`,应重新跑一次
-`fairness.run_fairness_audit()` 而非直接假设历史数字仍然成立。
+**TODO:** none. If the decision to restore `addr_state` is ever reconsidered,
+re-run `fairness.run_fairness_audit()` rather than assuming the historical
+numbers still hold.

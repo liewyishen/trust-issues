@@ -8,6 +8,7 @@ dependencies = [
     "fairlearn>=0.14.0",
     "lightgbm>=4.6.0",
     "matplotlib>=3.11.0",
+    "metaflow>=2.19.35",
     "mlflow>=3.14.0",
     "numba>=0.56",
     "numpy>=2.4.6",

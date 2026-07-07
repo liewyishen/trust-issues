@@ -470,3 +470,51 @@ def train_and_save(
         mlflow.log_artifact(str(model_path))
 
     return model_path
+
+
+def load_model_artifact(model_path: str | Path) -> dict:
+    """
+    Load a packaged model dict AND enforce that the feature contract it was
+    trained under still matches features.py's live FEATURES / CATEGORICAL --
+    the exact globals the inference path (_xy / _to_lgb_frame) will use to
+    encode whatever gets scored next.
+
+    train_and_save() bundles that contract INTO the artifact precisely so a
+    later scoring run cannot silently use a different feature set than the
+    model was trained on (features.py's INCLUDE_ADDR_STATE flipped, or the
+    feature list edited, between train and serve). But bundling it was only
+    half the job -- nothing consumed it. This is the other half: fail-closed
+    enforcement, the same discipline as the schema / leakage gates. A contract
+    mismatch STOPS the run rather than letting _to_lgb_frame encode against a
+    misaligned column set and hand LightGBM a frame that does not match what it
+    was trained on -- a KeyError at best, silently wrong predictions at worst.
+
+    Every packaged-model consumer (calibrate / evaluate / fairness / drift)
+    loads through here instead of a bare joblib.load, so the contract is
+    verified everywhere a shipped model re-enters inference.
+
+    Raises
+    ------
+    ValueError
+        If the artifact's stored features/categorical differ from the current
+        features.py FEATURES/CATEGORICAL.
+    """
+    artifact = joblib.load(model_path)
+    saved_features = artifact.get("features")
+    saved_categorical = artifact.get("categorical")
+    if saved_features != FEATURES or saved_categorical != CATEGORICAL:
+        raise ValueError(
+            "Model/feature-contract mismatch -- refusing to score.\n"
+            f"  packaged model was trained on:\n"
+            f"    features    = {saved_features}\n"
+            f"    categorical = {saved_categorical}\n"
+            f"  features.py now declares:\n"
+            f"    FEATURES    = {FEATURES}\n"
+            f"    CATEGORICAL = {CATEGORICAL}\n"
+            "Inference encodes with the live features.py globals (_xy / "
+            "_to_lgb_frame), so scoring this model now would use a different "
+            "feature set than it was trained on. Retrain (train_and_save) or "
+            "restore the matching features.py configuration (e.g. "
+            "INCLUDE_ADDR_STATE) before scoring."
+        )
+    return artifact

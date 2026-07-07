@@ -23,7 +23,7 @@ import mlflow
 
 import src.train as train_module
 from src.features import add_features, CATEGORICAL, FEATURES
-from src.train import train_and_save, train_lgb
+from src.train import train_and_save, train_lgb, load_model_artifact
 
 
 def _make_split(n, purposes, homes, states, emp_lengths, rng):
@@ -174,3 +174,49 @@ def test_train_and_save_creates_two_mlflow_runs(synthetic_splits, tmp_path):
     run_names = set(runs["tags.mlflow.runName"])
     assert "lr_baseline" in run_names
     assert "lgbm_production" in run_names
+
+
+# ---------------------------------------------------------------------------
+# 6. (W1) load_model_artifact enforces the packaged feature contract against
+# features.py's live FEATURES/CATEGORICAL. The self-describing artifact is now
+# self-ENFORCING: a model trained under a different feature set than the one
+# inference will encode with (via _xy/_to_lgb_frame) fails closed, instead of
+# silently scoring against a misaligned column set.
+# ---------------------------------------------------------------------------
+def test_load_model_artifact_accepts_matching_contract(synthetic_splits, tmp_path):
+    model_path = train_and_save(
+        synthetic_splits, model_dir=tmp_path / "models",
+        num_boost_round=20, early_stopping_rounds=5,
+    )
+    artifact = load_model_artifact(model_path)   # must not raise
+    assert artifact["features"] == FEATURES
+    assert artifact["categorical"] == CATEGORICAL
+
+
+def _dump_artifact(tmp_path, *, features, categorical):
+    """A minimal packaged-model dict with a chosen contract. load_model_artifact
+    validates the contract before touching the model, so model=None is fine."""
+    art = {
+        "model": None, "features": features, "categorical": categorical,
+        "category_maps": {}, "best_iteration": 1, "params": {}, "trained_at": "x",
+    }
+    path = tmp_path / "artifact.pkl"
+    joblib.dump(art, path)
+    return path
+
+
+def test_load_model_artifact_rejects_feature_contract_mismatch(tmp_path):
+    """A model packaged under an extra feature fails closed -- the scenario where
+    FEATURES changed between train time and score time."""
+    path = _dump_artifact(tmp_path, features=FEATURES + ["ghost_feature"], categorical=CATEGORICAL)
+    with pytest.raises(ValueError, match="contract mismatch"):
+        load_model_artifact(path)
+
+
+def test_load_model_artifact_rejects_categorical_mismatch(tmp_path):
+    """Same guard on the categorical contract -- e.g. INCLUDE_ADDR_STATE flipped
+    on between train and score, so addr_state is now expected but the model
+    never saw it."""
+    path = _dump_artifact(tmp_path, features=FEATURES, categorical=CATEGORICAL + ["addr_state"])
+    with pytest.raises(ValueError, match="contract mismatch"):
+        load_model_artifact(path)

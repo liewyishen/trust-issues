@@ -171,3 +171,64 @@ def test_calibrator_persists_and_reloads(synthetic_splits, model_path, tmp_path)
     np.testing.assert_allclose(
         apply_calibration(iso, probe), apply_calibration(reloaded, probe),
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. (W1) calibrate_model is a real inference consumer of the packaged model,
+# so it must fail closed when the model's feature contract no longer matches
+# features.py's live one -- not score through a misaligned column set.
+# ---------------------------------------------------------------------------
+def test_calibrate_model_fails_closed_on_contract_mismatch(synthetic_splits, tmp_path):
+    bad = {
+        "model": None, "features": FEATURES + ["ghost"], "categorical": CATEGORICAL,
+        "category_maps": {}, "best_iteration": 1, "params": {}, "trained_at": "x",
+    }
+    bad_path = tmp_path / "bad_model.pkl"
+    joblib.dump(bad, bad_path)
+    with pytest.raises(ValueError, match="contract mismatch"):
+        calibrate_model(
+            model_path=bad_path, splits=synthetic_splits,
+            calibrator_path=tmp_path / "cal.pkl",
+        )
+
+
+# ---------------------------------------------------------------------------
+# 6. (W2) load_calibrator enforces the calibrator<->model binding it records,
+# instead of writing it and discarding it on load. Applying a calibrator to a
+# different (e.g. retrained) model than it was fit against now fails closed.
+# ---------------------------------------------------------------------------
+def test_load_calibrator_enforces_model_binding(tmp_path):
+    from sklearn.isotonic import IsotonicRegression
+
+    iso = IsotonicRegression(out_of_bounds="clip").fit([0.0, 1.0], [0.0, 1.0])
+    cal_art = {
+        "calibrator": iso, "model_path": "models/lgbm_model.pkl",
+        "model_trained_at": "model-A", "trained_at": "cal-time",
+    }
+    path = tmp_path / "cal.pkl"
+    joblib.dump(cal_art, path)
+
+    # matching model -> returns the calibrator
+    assert load_calibrator(path, model_artifact={"trained_at": "model-A"}) is not None
+    # stale model (different trained_at) -> fails closed
+    with pytest.raises(ValueError, match="[Ss]tale calibrator"):
+        load_calibrator(path, model_artifact={"trained_at": "model-B"})
+    # no model given -> lenient bare load (inspection / tests)
+    assert load_calibrator(path) is not None
+
+
+def test_calibrator_binding_survives_real_round_trip(synthetic_splits, model_path, tmp_path):
+    """End to end: a calibrator produced by calibrate_model records the model's
+    trained_at, and load_calibrator then rejects a model whose trained_at differs
+    -- the retrain-and-forget-to-recalibrate failure the packaging note warns
+    about, now actually guarded."""
+    cal_path = tmp_path / "calibrator.pkl"
+    calibrate_model(model_path=model_path, splits=synthetic_splits, calibrator_path=cal_path)
+
+    model_artifact = joblib.load(model_path)          # trained_at == "test-fixture"
+    assert load_calibrator(cal_path, model_artifact=model_artifact) is not None
+
+    stale = dict(model_artifact)
+    stale["trained_at"] = "some-other-model"
+    with pytest.raises(ValueError, match="[Ss]tale calibrator"):
+        load_calibrator(cal_path, model_artifact=stale)

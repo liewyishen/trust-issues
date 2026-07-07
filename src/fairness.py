@@ -77,7 +77,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import joblib
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
@@ -87,7 +86,7 @@ from sklearn.metrics import roc_auc_score
 from .calibrate import DEFAULT_MODEL_PATH, apply_calibration
 from .data_loader import RANDOM_SEED, load_raw, temporal_split
 from .features import NUMERIC, TARGET, add_features, build_categorical
-from .train import LGB_PARAMS, _to_lgb_frame, _xy
+from .train import LGB_PARAMS, _to_lgb_frame, _xy, load_model_artifact
 
 # ---------------------------------------------------------------------------
 # Constants -- traced to notebooks/analysis.ipynb Section 9, not guesses.
@@ -571,7 +570,7 @@ def run_fairness_audit(
 
     if fair_df is None:
         model_path = Path(model_path) if model_path is not None else DEFAULT_MODEL_PATH
-        artifact = joblib.load(model_path)
+        artifact = load_model_artifact(model_path)  # fail-closed on feature-contract mismatch
         booster = artifact["model"]
         category_maps = artifact["category_maps"]
         best_iteration = artifact["best_iteration"]

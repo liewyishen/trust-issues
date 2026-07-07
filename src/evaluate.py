@@ -52,14 +52,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 
 from .calibrate import DEFAULT_MODEL_PATH, apply_calibration, load_calibrator
 from .data_loader import load_raw, temporal_split
 from .features import TARGET
-from .train import _to_lgb_frame, _xy
+from .train import _to_lgb_frame, _xy, load_model_artifact
 
 # ---------------------------------------------------------------------------
 # Cost model constants -- traced to notebooks/analysis.ipynb Cell 31, not
@@ -245,11 +244,13 @@ def _predict_calibrated(
         else model_path.parent / "isotonic_calibrator.pkl"
     )
 
-    artifact = joblib.load(model_path)
+    artifact = load_model_artifact(model_path)  # fail-closed on feature-contract mismatch
     booster = artifact["model"]
     category_maps = artifact["category_maps"]
     best_iteration = artifact["best_iteration"]
-    iso = load_calibrator(calibrator_path)
+    # Pass the model artifact so a stale calibrator (fit against a different
+    # model instance) is rejected rather than silently applied.
+    iso = load_calibrator(calibrator_path, model_artifact=artifact)
 
     X, _y = _xy(df)
     X_lgb = _to_lgb_frame(X, category_maps)

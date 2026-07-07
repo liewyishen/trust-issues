@@ -67,7 +67,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import joblib  # noqa: E402
 import mlflow  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -95,7 +94,7 @@ from src.data_validation import DTI_MAX_REAL, DTI_SENTINEL  # noqa: E402
 # the same anti-skew decision calibrate.py documents at its own import site:
 # a second, independently written encoding path here would be exactly the
 # train/serve skew this repo keeps warning about.
-from src.train import _to_lgb_frame, _xy  # noqa: E402
+from src.train import _to_lgb_frame, _xy, load_model_artifact  # noqa: E402
 
 MLFLOW_RUN_NAME = "drift_check"
 
@@ -526,8 +525,8 @@ def run_drift_check(
                 "training pipeline first: "
                 "uv run python pipelines/training_flow.py run"
             )
-    model_artifact = joblib.load(model_path)
-    calibrator = load_calibrator(calibrator_path)
+    model_artifact = load_model_artifact(model_path)  # fail-closed on feature-contract mismatch
+    calibrator = load_calibrator(calibrator_path, model_artifact=model_artifact)
     for year in current_years:
         if metrics[f"n_{year}"] == 0:
             metrics[f"calib_gap_{year}"] = float("nan")

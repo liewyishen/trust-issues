@@ -35,7 +35,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss, roc_auc_score
 
 from .data_loader import load_raw, temporal_split
-from .train import DEFAULT_MODEL_DIR, _to_lgb_frame, _xy
+from .train import DEFAULT_MODEL_DIR, _to_lgb_frame, _xy, load_model_artifact
 
 DEFAULT_MODEL_PATH = DEFAULT_MODEL_DIR / "lgbm_model.pkl"
 
@@ -53,15 +53,46 @@ def apply_calibration(iso: IsotonicRegression, raw_probs) -> np.ndarray:
     return iso.transform(raw_probs)
 
 
-def load_calibrator(calibrator_path: str | Path) -> IsotonicRegression:
+def load_calibrator(
+    calibrator_path: str | Path,
+    model_artifact: dict | None = None,
+) -> IsotonicRegression:
     """
-    Load a previously saved isotonic calibrator.
+    Load a previously saved isotonic calibrator, optionally enforcing that it
+    was fit against the model you are about to score with.
 
-    Returns just the fitted IsotonicRegression, ready to pass to
-    apply_calibration(). See calibrate_model()'s docstring for why the
-    saved artifact bundles more than the bare calibrator internally.
+    An isotonic calibrator is a lookup table shaped entirely by ONE model's raw
+    score distribution on Calib; applied to a DIFFERENT (e.g. retrained) model's
+    raw scores it produces confidently wrong probabilities with no error raised
+    -- the exact failure calibrate_model()'s packaging note warns about.
+    calibrate_model() records the model's identity (model_path + the model
+    artifact's own `trained_at`) alongside the calibrator for precisely this
+    reason. That binding used to be written and then discarded on load; now,
+    pass the model artifact you are about to score with as `model_artifact` and
+    this ENFORCES it: if the calibrator was fit against a different model
+    instance (its `trained_at` differs), it raises rather than silently applying
+    a stale calibrator. Omit `model_artifact` (default) only for bare
+    inspection or tests that just want the transform.
+
+    Raises
+    ------
+    ValueError
+        If model_artifact is given and the calibrator's recorded
+        model-trained_at does not match model_artifact["trained_at"].
     """
     artifact = joblib.load(calibrator_path)
+    if model_artifact is not None:
+        fit_against = artifact.get("model_trained_at")
+        current = model_artifact.get("trained_at")
+        if fit_against is not None and current is not None and fit_against != current:
+            raise ValueError(
+                "Stale calibrator -- refusing to apply.\n"
+                f"  calibrator was fit against a model trained_at={fit_against!r}\n"
+                f"  current model trained_at={current!r}\n"
+                "An isotonic calibrator is valid only for the exact model whose "
+                "raw scores it was fit on. Re-run calibrate_model() against the "
+                "current model before scoring."
+            )
     return artifact["calibrator"]
 
 
@@ -128,7 +159,7 @@ def calibrate_model(
          "calibrated": {"brier":..., "mean_pred":..., "auc":...}}
     """
     model_path = Path(model_path) if model_path is not None else DEFAULT_MODEL_PATH
-    artifact = joblib.load(model_path)
+    artifact = load_model_artifact(model_path)  # fail-closed on feature-contract mismatch
     model = artifact["model"]
     category_maps = artifact["category_maps"]
     best_iteration = artifact["best_iteration"]
@@ -198,6 +229,11 @@ def calibrate_model(
         calibrator_artifact = {
             "calibrator": iso,
             "model_path": str(model_path),
+            # The identity of the model this calibrator was fit against, so
+            # load_calibrator() can refuse to apply it to a different (e.g.
+            # retrained) model. This is the binding that makes the model_path
+            # note above enforceable rather than merely inspectable.
+            "model_trained_at": artifact.get("trained_at"),
             "trained_at": datetime.now(timezone.utc).isoformat(),
         }
         joblib.dump(calibrator_artifact, calibrator_path)

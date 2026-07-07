@@ -344,3 +344,110 @@ returned to the caller; automation can opt into `fail_on_alarm=True`.
 Test suite: 85 → 104. The should-fire test injects a (100, 1000] tail into
 a synthetic current year and asserts the tripwire fires while PSI stays
 quiet -- the PSI-blindness finding as an executable assertion, not prose.
+
+---
+
+## Cost objective is `regret` (break-even 0.270), not `pure_profit` (0.156): an explicit, switchable identity
+
+**Date:** verified against the test suite (104 → 116) and a direct argmax
+check on 150k well-calibrated synthetic rows. All break-even numbers below
+come from `uv run pytest` / that check, not from memory.
+
+**Finding:** a code review found that `src/evaluate.py`'s `total_profit`
+optimizes an objective whose break-even is NOT the one the module's own
+test comment claimed. `total_profit` charges an opportunity cost on every
+GOOD applicant that was rejected (`- profit_good[rejected_good]`). Because
+the total good margin G over the population is fixed, rejected_good_margin
+= G − approved_good_margin, so the objective is algebraically
+
+    2*approved_good_margin − approved_bad_LGD − G,
+
+i.e. it DOUBLE-WEIGHTS approving goods relative to a pure originated-book
+P&L. For a well-calibrated p the decision boundary is therefore
+`p < 2m/(2m+LGD) = 0.24/0.89 = 0.270`, not the pure-profit
+`m/(m+LGD) = 0.12/0.77 = 0.156` the old `test_evaluate.py` comment
+asserted. The evidence points at 0.270: the real-data operating threshold
+is 0.25 (shipped no-state model) / 0.26 (historical with-state), and a
+150k-row argmax lands on 0.26-0.28 for this objective and 0.14-0.17 for
+pure profit. The opportunity-cost term was always live; the doc just named
+the wrong break-even.
+
+**The two objectives -- business semantics:**
+
+- **`pure_profit`** -- originated-book P&L only. A rejected loan never
+  originates, so it carries no term: +margin on an approved good, −LGD on
+  an approved bad, zero on anything rejected. This is the "only count the
+  loans we actually booked" view. Break-even `m/(m+LGD) = 0.156`.
+- **`regret`** -- `pure_profit` minus the foregone interest margin on each
+  rejected GOOD applicant. This treats a false rejection as a real cost:
+  in a market where the lender competes for creditworthy borrowers, a good
+  applicant turned away is margin the book will not earn. It is the fuller
+  decision-analytic (regret / opportunity-cost) framing. Break-even
+  `2m/(2m+LGD) = 0.270`.
+
+The two are not a cosmetic relabeling: on identical data they select
+materially different operating points (~0.26 vs ~0.15), which cascade into
+different approval rates, bad rates, and loss figures.
+
+**Decision: keep `regret` as the default.** Two reasons. (1) Every number
+this repo reports -- best_t ~0.25-0.26, approval ~78-80%, improvement
+~$185M over naive 0.50 (see the "Execute the fairness conclusion" and
+evaluation entries / README) -- was computed under `regret`. Switching the
+default to `pure_profit` would silently move all of them at once, with no
+change to the model. (2) On the merits, for an originated-loan lender the
+opportunity cost of a wrong rejection is a genuine P&L line, not a fiction;
+`regret` is the more complete framing and `pure_profit` the narrower one.
+This is a decision about which business question the threshold answers, and
+`regret` answers the one the whole project has been answering all along.
+Naming it changes nothing about the shipped operating point -- it only
+makes the identity auditable instead of buried in one summation.
+
+**Implementation: a config switch, not a hard choice.** `src/evaluate.py`
+adds a module-level `PROFIT_OBJECTIVE = "regret"`; `pure_profit()` and
+`regret_profit()` both exist as named functions; `total_profit(...,
+objective=...)` dispatches to the chosen one (default = the switch);
+`select_threshold` / `evaluate_at_threshold` / `run_evaluation` all forward
+an `objective` argument defaulting to it. Same reproducibility rationale as
+`features.py`'s `INCLUDE_ADDR_STATE` switch (see the addr_state entry
+above): the alternative objective stays runnable and directly comparable at
+any time, rather than being deleted into a paragraph. The prior test
+asserted only `best_t < 0.5` -- true for both objectives, so it could never
+catch the conflation. It is replaced by tests that PIN each break-even
+(`regret` ~0.270, `pure_profit` ~0.156) and assert the two pick different
+thresholds, so any future silent flip fails CI. No model logic, feature
+engineering, split, or the threshold-selection algorithm itself was
+touched -- only the objective's identity was made explicit.
+
+**Attached behavior change (W1/W2): inference now consumes the packaged
+contract, it does not just carry it.** The same review found two places
+where an artifact recorded a safety property that no code enforced.
+`src/train.py`'s `train_and_save()` bundles `features` / `categorical` /
+`params` into the model `.pkl` with a note that this makes the artifact
+"self-describing", and `src/calibrate.py` stored `model_path` alongside the
+calibrator to make its binding "explicit and inspectable". But a grep of
+the whole repo showed no consumer ever read `artifact["features"]` /
+`["categorical"]` / `["params"]` (only `category_maps` was used), and
+`load_calibrator()` discarded the binding on load. Inference re-read
+`features.py`'s live module globals instead -- so a `FEATURES` /
+`INCLUDE_ADDR_STATE` change between train and score would have silently
+encoded against a different feature set than the model was trained on,
+exactly the train/serve skew the packaging comments warned about, with no
+guard. Disposition: `src/train.py` gains `load_model_artifact()`, which
+fail-closes when the packaged `features`/`categorical` no longer match
+`features.py`'s live globals; calibrate / evaluate / fairness / drift all
+load through it instead of a bare `joblib.load`. `load_calibrator(path,
+model_artifact=...)` now raises on a stale calibrator (the model's
+`trained_at` recorded at fit time no longer matches the model in use),
+closing the "retrain the model, forget to recalibrate" failure. The
+self-describing artifact is now self-ENFORCING -- both guards tested on
+both sides (matching contract passes, mismatch fails closed). The three
+now-unused `joblib` imports this left behind were removed, and the dead
+`fairlearn` dependency (the audit is hand-rolled) was dropped from
+`pyproject.toml`, applying the repo's own "declare only what you import"
+rule to itself.
+
+**TODO:** none. If `PROFIT_OBJECTIVE` is ever flipped to `pure_profit`,
+re-run `run_evaluation()` and update EVERY threshold-dependent number in
+this doc and the README (best_t, approval rate, bad rates, improvement) --
+they are all objective-specific, and the historical `regret` figures do
+not carry over.

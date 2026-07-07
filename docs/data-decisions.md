@@ -48,12 +48,15 @@ value, and merging it away would erase that meaning from the code. Values with
 no evidentiary basis beyond 1000 (e.g. a stray 9999) continue to be rejected.
 
 **TODO:**
-- `pipelines/drift_check.py` (not yet built) must monitor `dti_n`'s
-  distribution by `issue_year`, not just its marginal range -- the 2016+
-  regime is invisible to a check that only looks at the overall histogram,
-  since Train never sees it and Test/2018-holdout do. This is a live
-  train/serve distribution-shift signal, not just a one-time data-hygiene
-  fix.
+- ~~`pipelines/drift_check.py` (not yet built) must monitor `dti_n`'s
+  distribution by `issue_year`, not just its marginal range~~ **Done.**
+  `pipelines/drift_check.py` now exists and monitors `dti_n` per
+  `issue_year`, not just its marginal range: per-year PSI/KS against the
+  training-years distribution, a separate 999-sentinel-rate signal, and a
+  dedicated (100, 1000] tripwire share -- plus the per-year calibration
+  gap. The 2016+ regime that is invisible to an overall histogram is
+  exactly what its first real run caught; see the "Drift monitoring" entry
+  below for the design and numbers.
 
 ---
 
@@ -244,5 +247,100 @@ clean input, fires on dirty input).
 **TODO:** none here. The calibrated-mean-vs-actual gap this run reprints
 (mean_pred 0.1915 vs. actual test default rate 0.2323) is deliberately NOT
 "fixed" by this pass — it is a real 2016+ distribution-shift signal, not a
-bug, and belongs to the planned `pipelines/drift_check.py` (see the dti_n
-entry's still-live TODO above).
+bug, and ~~belongs to the planned `pipelines/drift_check.py` (see the dti_n
+entry's still-live TODO above)~~ **is now monitored**:
+`pipelines/drift_check.py` reports it per year as `calib_gap_<year>` (first
+real run: 2016 = −0.0372 and 2017 = −0.0468, both alarmed; 2015 baseline =
++0.0003). See the "Drift monitoring" entry below.
+
+---
+
+## Drift monitoring: the 2016+ dti_n regime shift gets a watcher
+
+**Date:** verified against the first real-data drift run (MLflow run
+`ae7fcc58…`, run name `drift_check`, experiment `lc_default_risk`). All
+numbers below come from that run's logged metrics, not from memory or
+earlier documents.
+
+**Finding:** two earlier entries left the same live signal unmonitored. The
+495-row investigation (above) established a 2016+ dti_n reporting regime the
+training years never see -- 0 rows in Train (2007-2014), 7 in 2015, 488 in
+2016-2018 -- and the audit-hardening entry deliberately declined to "fix"
+the calibrated-mean-vs-actual gap (0.1915 vs. 0.2323) because it is that
+shift's trace, not a bug. Both entries pointed at a then-unbuilt
+`pipelines/drift_check.py`.
+
+**Disposition:** `pipelines/drift_check.py` now exists: a plain module with
+a callable entry (`uv run python pipelines/drift_check.py`). Three scoping
+decisions made before implementation:
+
+- **No Metaflow FlowSpec.** The check is one linear step; a FlowSpec would
+  pickle the full DataFrame across a subprocess boundary for zero
+  orchestration benefit.
+- **Own MLflow run** (`drift_check`, same `lc_default_risk` experiment).
+  Monitoring and training have different lifecycles, so drift metrics never
+  append onto an `lgbm_production` run.
+- **Hand-rolled PSI + scipy KS, not Evidently.** Four scalar signals do not
+  justify Evidently's base dependency footprint (litestar/uvicorn/watchdog/
+  nltk plus usage telemetry) in a batch job, and hand-rolled matches this
+  repo's hand-rolled fairness audit. `scipy` is now declared as a direct
+  dependency -- it was already in the tree transitively; declaring what the
+  code imports directly is the point.
+
+Five per-issue_year signals, reference = training years (2007-2014),
+current = each of 2015-2018 as FULL years (not the val/calib subsamples):
+
+1. `psi_dti_n_<year>` -- PSI over quantile bins fixed ONCE from the
+   reference. Outer bin edges are pinned to the schema contract's
+   [0, 1000], not the reference min/max: the training years top out far
+   below 100, so an edge at their max would silently drop the 2016+ tail
+   out of every bin. Empty bins are epsilon-clipped (1e-4, no
+   renormalisation) so a fully emptied bin screams finitely instead of
+   overflowing.
+2. `ks_dti_n_<year>` -- two-sample KS statistic, never the p-value: at
+   n ~ 4.5e5 every visible shift is "significant", so only the effect size
+   informs.
+3. `sentinel_rate_<year>` -- share of `dti_n == 999`. The sentinel is
+   excluded from PSI/KS and from the tripwire (fed raw into PSI it fakes a
+   mass spike at 999, and it falls inside (100, 1000] numerically); a
+   change in missingness is its own signal, alarmed on the delta vs. the
+   reference rate.
+4. `tripwire_share_<year>` -- share of real `dti_n` in (100, 1000], the
+   pre-widening ceiling repurposed as a tripwire. This signal exists
+   because quantile-binned PSI is nearly blind to a ~0.1% tail: without it
+   the monitor would sleep through the very shift that justified building
+   it.
+5. `calib_gap_<year>` -- mean calibrated PD minus actual default rate,
+   scored with the SHIPPED model + calibrator (never refit; the scoring
+   path replicates `calibrate_model()`'s exactly). The calibrator was fit
+   on the 2015 calib slice, so 2015 is the natural not-yet-drifted
+   baseline.
+
+**What the first real run shows** (run `ae7fcc58…`, 5 drift ALERTs):
+
+| year | tripwire_share      | calib_gap           | psi_dti_n |
+|------|---------------------|---------------------|-----------|
+| 2015 | 0.000019 (quiet)    | +0.0003 (baseline)  | 0.0498    |
+| 2016 | 0.000246 (ALERT)    | −0.0372 (ALERT)     | 0.0392    |
+| 2017 | 0.001543 (ALERT)    | −0.0468 (ALERT)     | 0.0274    |
+| 2018 | 0.002760 (ALERT)    | +0.0154 (quiet)     | 0.0502    |
+
+The tripwire climbs monotonically through 2016-2018 while PSI stays below
+0.06 everywhere (KS below 0.082, under its 0.10 threshold) -- the monitor's
+own first run confirms the design premise: PSI alone would have slept
+through the regime shift. The calibration gap goes negative exactly where
+the regime lives (2016-2017: the model under-predicts risk) and is ~0 on
+the 2015 baseline. 2018's positive gap (+0.0154, under the 0.02 threshold)
+points the other way -- consistent with the suspected right-censoring that
+already keeps 2018 out of Test as a separate holdout.
+
+**Alarm semantics, deliberately different from the leakage sentinels:** a
+leakage sentinel firing means the run's output is invalid, so it raises. A
+drift alarm is the observation this monitor exists to record -- on this
+dataset 2016+ is EXPECTED to fire -- so the default is report-don't-raise:
+alarms print as `ALERT:` lines, are counted into `n_drift_alarms`, and are
+returned to the caller; automation can opt into `fail_on_alarm=True`.
+
+Test suite: 85 → 104. The should-fire test injects a (100, 1000] tail into
+a synthetic current year and asserts the tripwire fires while PSI stays
+quiet -- the PSI-blindness finding as an executable assertion, not prose.

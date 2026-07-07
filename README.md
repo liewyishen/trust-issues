@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-104%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -44,6 +44,7 @@ trust beats a 0.99 you can't.**
 | **4. Baseline-first modeling** | Logistic-regression baseline before LightGBM; no premature complexity |
 | **5. Calibration + cost-based thresholds** | Isotonic calibration on a disjoint calibration slice; operating threshold chosen by expected profit, not 0.5 |
 | **6. Explainability + fairness** | SHAP explanations; a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers 0.74 → 0.99 for an AUC cost of just 0.0036 |
+| **7. Drift monitoring** | A runnable yearly drift check (`pipelines/drift_check.py`): hand-rolled PSI + KS on `dti_n` per issue year against the training-years distribution, a separate 999-sentinel rate, a (100, 1000] tripwire share, and a per-year calibration gap scored with the shipped model. Validated against the dataset's own 2016+ DTI regime shift — the tripwire and calibration-gap alarms fire on 2016+ and stay quiet on 2015. A demonstrated capability on this dataset, not a live production monitoring service |
 
 ---
 
@@ -112,11 +113,12 @@ credit system.
 | **Python 3.11 + uv** | Runtime and reproducible dependency / virtualenv management |
 | **LightGBM** | The production model — gradient-boosted trees on application-time features |
 | **scikit-learn** | Logistic-regression baseline, preprocessing, and the isotonic calibrator |
+| **SciPy** | Two-sample KS statistic in the drift monitor — declared as a direct dependency the moment code imported it directly. Evidently was deliberately not adopted: its web-server + telemetry dependency footprint isn't worth four scalar signals, and hand-rolled PSI matches the repo's hand-rolled audits |
 | **Pandera** | Schema gate that *fails* the pipeline on contract violations (it caught the 495 DTI rows) |
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | Prototype reason codes / feature explanations for the shipped model |
-| **pytest** | 85 tests across the modeling layer |
+| **pytest** | 104 tests across the modeling layer |
 
 ---
 
@@ -124,8 +126,9 @@ credit system.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (85 passing)
+uv run pytest                                        # run the test suite (104 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
+uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
 uv run jupyter lab                                   # open the analysis notebook
 ```
@@ -150,10 +153,10 @@ attribution required if you reproduce results.
 data/          Download instructions + gitignored real files
 docs/          Detailed write-ups for each stage
 notebooks/     Exploratory analysis notebook (+ HTML export)
-pipelines/     Metaflow end-to-end training pipeline
+pipelines/     Metaflow end-to-end training pipeline + the yearly dti_n drift check
 src/           Modeling layer: data loading, validation, features, leakage checks,
                training, calibration, evaluation, fairness
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (85 passing)
+tests/         pytest suite (104 passing)
 ```

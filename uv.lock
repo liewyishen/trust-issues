@@ -810,23 +810,6 @@ wheels = [
 ]
 
 [[package]]
-name = "fairlearn"
-version = "0.14.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "narwhals" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "scikit-learn" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/58/07/f8b79188e1d148634f0aa88e2c503c9174c8ae26c5575747e832f989a837/fairlearn-0.14.0.tar.gz", hash = "sha256:dc9d12fc6d3f4c94f1bf32eb11032b73363c4a62c986485bcc87febe2e583ebd", size = 105832, upload-time = "2026-06-07T16:14:20.225Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/99/bd/776182bf82b0a3223773a43b0e7b9510afe6c3d32ed8dd5a27b30a89530b/fairlearn-0.14.0-py3-none-any.whl", hash = "sha256:2ffe37b71f5b6a8e140b5db75a7990da64fd04b46e7acfc81654f92497ed2ece", size = 135513, upload-time = "2026-06-07T16:14:18.888Z" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.138.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4076,7 +4059,6 @@ name = "trust-issues"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "fairlearn" },
     { name = "lightgbm" },
     { name = "matplotlib" },
     { name = "metaflow" },
@@ -4085,7 +4067,6 @@ dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pandera" },
-    { name = "pytest" },
     { name = "scikit-learn" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -4104,7 +4085,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fairlearn", specifier = ">=0.14.0" },
     { name = "lightgbm", specifier = ">=4.6.0" },
     { name = "matplotlib", specifier = ">=3.11.0" },
     { name = "metaflow", specifier = ">=2.19.35" },
@@ -4113,7 +4093,6 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pandera", specifier = ">=0.32.1" },
-    { name = "pytest", specifier = ">=9.1.1" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "seaborn", specifier = ">=0.13.2" },
@@ -4124,7 +4103,7 @@ requires-dist = [
 dev = [
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
 ]
 
 [[package]]

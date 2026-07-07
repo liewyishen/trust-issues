@@ -1,0 +1,30 @@
+[project]
+name = "trust-issues"
+version = "0.1.0"
+description = "A loan risk model that did the boring parts right."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fairlearn>=0.14.0",
+    "lightgbm>=4.6.0",
+    "matplotlib>=3.11.0",
+    "mlflow>=3.14.0",
+    "numba>=0.56",
+    "numpy>=2.4.6",
+    "pandas>=2.3.3",
+    "pandera>=0.32.1",
+    "pytest>=9.1.1",
+    "scikit-learn>=1.9.0",
+    "seaborn>=0.13.2",
+    "shap>=0.49.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "jupyter>=1.1.1",
+    "pytest>=8.0.0",
+]

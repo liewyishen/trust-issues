@@ -50,6 +50,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import mlflow  # noqa: E402
+import pandas as pd  # noqa: E402
 from metaflow import FlowSpec, step  # noqa: E402
 
 EXPERIMENT_NAME = "lc_default_risk"
@@ -108,6 +109,31 @@ def log_metrics_to_run(run_id: str, metrics: dict[str, float]) -> None:
             if value is None or (isinstance(value, float) and not math.isfinite(value)):
                 continue
             mlflow.log_metric(key, float(value))
+
+
+# --- Leakage-sentinel helpers ----------------------------------------------------
+
+def feature_date_columns(df: pd.DataFrame) -> list[str]:
+    """
+    Candidate feature-timestamp columns for the temporal-consistency sentinel.
+
+    A column qualifies if it is datetime-typed or follows LendingClub's `*_d`
+    date-column naming convention -- except issue_d itself, which is the
+    decision date every feature timestamp gets compared against (issue_year is
+    an int and matches neither rule).
+
+    On the cleaned dataset this returns [] -- the known post-origination date
+    fields were removed upstream, and prove_forbidden_absent() proves it every
+    run. That empty list is what makes the start step's SKIPPED log honest:
+    the sentinel states WHY it has nothing to check, and self-arms the moment
+    a future join reintroduces any date column. Pure function, unit-testable
+    without a flow run.
+    """
+    return [
+        c for c in df.columns
+        if c != "issue_d"
+        and (pd.api.types.is_datetime64_any_dtype(df[c]) or c.endswith("_d"))
+    ]
 
 
 # --- Scalar extraction helpers -------------------------------------------------
@@ -179,19 +205,25 @@ class TrainingFlow(FlowSpec):
 
     @step
     def start(self):
-        """Load + validate the data, run the leakage gate, build the splits."""
+        """Load + validate the data, run all four leakage sentinels, build the splits."""
         from src.data_loader import load_raw, temporal_split
-        from src.features import FEATURES
-        from src.leakage_check import check_forbidden_features, prove_forbidden_absent
+        from src.features import CATEGORICAL, FEATURES, TARGET, add_features
+        from src.leakage_check import (
+            check_forbidden_features,
+            check_single_feature_auc,
+            check_temporal_consistency,
+            prove_forbidden_absent,
+        )
 
         configure_mlflow()
 
         df = load_raw()  # data_validation runs inside load_raw() (fail-closed)
 
-        # Fail-closed leakage gate: both raise ValueError on any violation, which
-        # aborts the flow before any compute is spent on training. check the
-        # model's declared FEATURES, and prove the forbidden columns are truly
-        # absent from the loaded frame (catches a reintroduction via a bad join).
+        # Sentinels 1+2 of leakage_check, fail-closed: both raise ValueError on
+        # any violation, which aborts the flow before any compute is spent on
+        # training. Check the model's declared FEATURES, and prove the forbidden
+        # columns are truly absent from the loaded frame (catches a
+        # reintroduction via a bad join).
         print(check_forbidden_features(FEATURES))
         report = prove_forbidden_absent(df)
         print(
@@ -199,7 +231,51 @@ class TrainingFlow(FlowSpec):
             "post-decision fields confirmed absent."
         )
 
+        # Sentinel 3: temporal consistency -- no feature timestamp may post-date
+        # the decision date. On the cleaned dataset there is usually nothing to
+        # compare (the post-origination date fields are exactly the ones
+        # sentinel 2 just proved absent), so the common path is a SKIP -- but an
+        # explicit, logged one, never a silent absence. The scan self-arms the
+        # moment a future join brings any date column back in, and violations
+        # then fail the flow with the same closed semantics as sentinels 1+2.
+        date_cols = feature_date_columns(df)
+        if date_cols:
+            for col in date_cols:
+                bad = check_temporal_consistency(df, col, "issue_d")
+                if not bad.empty:
+                    raise ValueError(
+                        f"Temporal leakage: {len(bad)} rows have {col} strictly "
+                        "after issue_d. A feature computed from post-decision "
+                        "data leaks the future -- see check_temporal_consistency "
+                        "in leakage_check.py."
+                    )
+            print(
+                f"Temporal-consistency gate passed: {date_cols} never "
+                "post-date issue_d."
+            )
+        else:
+            print(
+                "Temporal-consistency check SKIPPED (explicitly, not silently): "
+                "the cleaned dataset has no feature timestamp column to compare "
+                "against issue_d -- the known post-origination date fields are "
+                "all in DEFAULT_FORBIDDEN and were proven absent above. This "
+                "sentinel self-arms if a future join reintroduces a date column."
+            )
+
         self.splits = temporal_split(df)  # stored ONCE; reused by every step
+
+        # Sentinel 4 of leakage_check: the standalone-AUC red flag, run on the
+        # exact feature frame the model will train on. A single feature with
+        # standalone AUC > 0.90 is almost certainly leaking the target
+        # (legitimate signals rarely exceed ~0.75), and the check is model-free
+        # -- it needs only the data -- so it runs HERE, before any training
+        # compute is spent, with the same fail-closed semantics as the gates
+        # above.
+        print(check_single_feature_auc(
+            add_features(self.splits["train"]), FEATURES, TARGET,
+            categorical=CATEGORICAL,
+        ))
+
         self.next(self.train)
 
     @step
@@ -250,8 +326,21 @@ class TrainingFlow(FlowSpec):
         from src.fairness import run_fairness_audit
 
         configure_mlflow()
-        result = run_fairness_audit(self.model_path, self.splits)
+        # Layer 1 audits at the model's REAL operating point -- the
+        # profit-maximizing threshold the evaluate step just chose on Val --
+        # not at fairness.py's notebook-era fallback default. (Layer 3 keeps
+        # its own deliberate 0.22; see ABLATION_THRESHOLD in src/fairness.py.)
+        result = run_fairness_audit(
+            self.model_path,
+            self.splits,
+            audit_threshold=self.eval_metrics["best_threshold"],
+        )
         self.fairness_metrics = fairness_scalars(result)  # drops fair_df + layers
+        # Record WHICH operating point Layer 1 was audited at, so the MLflow
+        # archive answers "at what threshold", not just "what ratio".
+        self.fairness_metrics["fairness_audit_threshold"] = float(
+            self.eval_metrics["best_threshold"]
+        )
         log_metrics_to_run(self.prod_run_id, self.fairness_metrics)
         self.next(self.end)
 

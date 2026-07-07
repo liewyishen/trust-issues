@@ -10,6 +10,9 @@ Four checks are provided:
   2. Known post-decision fields are absent entirely  -> prove_forbidden_absent
   3. No feature timestamp post-dates the decision     -> check_temporal_consistency
   4. No single feature is suspiciously predictive     -> flag_suspicious_auc
+     (single_feature_aucs computes the per-feature standalone AUCs it
+      consumes; check_single_feature_auc bundles compute + flag + raise into
+      one fail-closed gate for pipeline use)
 
 Dataset context
 ---------------
@@ -29,6 +32,7 @@ from __future__ import annotations
 from typing import Sequence
 
 import pandas as pd
+from sklearn.metrics import roc_auc_score
 
 # Fields that are set AFTER the credit decision is made, using ORIGINAL Lending Club
 # column names. Using any of these as a model input is classic target leakage: the
@@ -242,3 +246,129 @@ def flag_suspicious_auc(
     {'total_pymnt': 0.99}
     """
     return {feature: auc for feature, auc in auc_per_feature.items() if auc > threshold}
+
+
+def single_feature_aucs(
+    df: pd.DataFrame,
+    features: Sequence[str],
+    target: str,
+    categorical: Sequence[str] = (),
+) -> dict[str, float]:
+    """
+    Compute each candidate feature's standalone AUC-ROC against the target.
+
+    Produces the auc_per_feature mapping flag_suspicious_auc() consumes, so the
+    "no single feature is suspiciously predictive" check can run as an
+    automated pipeline gate instead of depending on someone remembering to
+    hand-compute the AUCs in a notebook.
+
+    Per-feature scoring:
+      - Numeric features: the raw values are the ranking score (AUC is
+        rank-based, so no scaling is needed). Rows where the feature is NaN
+        are dropped pairwise -- e.g. emp_length_ord is NaN wherever emp_length
+        was "NI", and those rows simply don't participate in that feature's
+        AUC.
+      - Categorical features: each category is target-encoded to its mean
+        default rate within df, then ranked like a numeric score. In-sample
+        encoding is deliberately optimistic -- for a red-flag detector an
+        upper bound points the right way: a feature that stays under the
+        threshold even with this advantage is definitely not leaking.
+      - Orientation: the reported value is max(auc, 1 - auc). A protective
+        feature (higher fico -> LESS default) has raw AUC below 0.5, and a
+        detector that only looked above 0.5 would be blind to negatively
+        oriented leaks (e.g. a payments-received column, where more payments
+        means less default).
+      - Degenerate cases (a feature with fewer than 2 distinct non-NaN values,
+        or a target left single-class after the NaN drop) are skipped, not
+        scored -- there is no meaningful AUC to report for them.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Frame containing the candidate feature columns and the target.
+    features : sequence of str
+        Column names to score.
+    target : str
+        Binary 0/1 target column name.
+    categorical : sequence of str
+        Which of `features` are categorical (target-encoded before ranking).
+
+    Returns
+    -------
+    dict[str, float]
+        Feature name -> standalone AUC in [0.5, 1.0], degenerate features
+        skipped. Feed directly into flag_suspicious_auc().
+    """
+    categorical_set = set(categorical)
+    y = df[target]
+
+    aucs: dict[str, float] = {}
+    for feature in features:
+        if feature in categorical_set:
+            score = df[feature].map(y.groupby(df[feature]).mean())
+        else:
+            score = pd.to_numeric(df[feature], errors="coerce")
+
+        mask = score.notna() & y.notna()
+        score_m, y_m = score[mask], y[mask]
+        if score_m.nunique() < 2 or y_m.nunique() < 2:
+            continue
+        auc = float(roc_auc_score(y_m, score_m))
+        aucs[feature] = max(auc, 1.0 - auc)
+    return aucs
+
+
+def check_single_feature_auc(
+    df: pd.DataFrame,
+    features: Sequence[str],
+    target: str,
+    categorical: Sequence[str] = (),
+    threshold: float = 0.9,
+) -> str:
+    """
+    Fail-closed gate: raise if any single feature is suspiciously predictive.
+
+    Bundles single_feature_aucs() + flag_suspicious_auc() + raise into the
+    same fail semantics as check_forbidden_features / prove_forbidden_absent,
+    so a pipeline can wire "no single feature exceeds AUC 0.90" as a gate that
+    stops the run, not a warning that scrolls by. Model-free by construction
+    (only the data is needed), so it can run before any training compute is
+    spent.
+
+    Parameters
+    ----------
+    df, features, target, categorical :
+        Forwarded to single_feature_aucs().
+    threshold : float
+        Standalone AUC above which a feature fails the gate. Default 0.9.
+
+    Returns
+    -------
+    str
+        Confirmation message when no feature exceeds the threshold.
+
+    Raises
+    ------
+    ValueError
+        Lists every flagged feature with its AUC (highest first), so all
+        violations surface at once -- the same reporting discipline as
+        check_forbidden_features.
+    """
+    aucs = single_feature_aucs(df, features, target, categorical=categorical)
+    flagged = flag_suspicious_auc(aucs, threshold=threshold)
+    if flagged:
+        listing = ", ".join(
+            f"{name} (AUC={auc:.4f})"
+            for name, auc in sorted(flagged.items(), key=lambda kv: -kv[1])
+        )
+        raise ValueError(
+            f"Suspiciously predictive standalone features detected: {listing}\n"
+            f"A single feature with standalone AUC > {threshold} almost always "
+            "means target leakage, not signal (legitimate risk signals rarely "
+            "exceed ~0.75 standalone). Investigate before training -- see "
+            "flag_suspicious_auc in leakage_check.py."
+        )
+    return (
+        f"OK: no single feature exceeds standalone AUC {threshold} "
+        f"({len(aucs)} features checked)."
+    )

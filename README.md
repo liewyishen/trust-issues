@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-75%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -39,11 +39,11 @@ trust beats a 0.99 you can't.**
 | Stage | What |
 |-------|------|
 | **1. Problem framing** | Binary default target taken from the dataset's own label (fully paid vs. defaulted) — no invented horizon; the cost-sensitive operating threshold is set later, in evaluation (LGD 0.65 / margin 0.12), not assumed upfront |
-| **2. Leakage-aware data prep** | Programmatic blocklist of post-decision fields + a pandera schema gate + temporal-consistency checks — leakage *fails* the pipeline, it isn't just warned about |
+| **2. Leakage-aware data prep** | A pandera schema gate plus four leakage sentinels wired into the pipeline: two blocklist checks that raise (forbidden post-decision fields in the feature list / reintroduced into the frame), a standalone-AUC gate (any single feature with AUC > 0.9 fails the run), and a temporal-consistency sentinel that self-arms if a date column ever appears — on today's cleaned data it logs an explicit SKIP with its reason, rather than pretending to guard |
 | **3. Point-in-time-safe features** | All features constructed from data available at application date only |
 | **4. Baseline-first modeling** | Logistic-regression baseline before LightGBM; no premature complexity |
 | **5. Calibration + cost-based thresholds** | Isotonic calibration on a disjoint calibration slice; operating threshold chosen by expected profit, not 0.5 |
-| **6. Explainability + fairness** | SHAP explanations; a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers 0.73 → 0.99 for an AUC cost of just 0.0035 |
+| **6. Explainability + fairness** | SHAP explanations; a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers 0.74 → 0.99 for an AUC cost of just 0.0036 |
 
 ---
 
@@ -65,9 +65,9 @@ suspicious paid off:
 
 **`addr_state` was a digital-redlining shortcut, so production dropped it.** The three-layer
 fairness audit ends in an ablation that retrains the model *with* and *without* the state feature.
-With `addr_state` in, Mississippi's Equal-Opportunity ratio for good borrowers sat at **~0.73** —
+With `addr_state` in, Mississippi's Equal-Opportunity ratio for good borrowers sat at **~0.74** —
 well under the 0.80 benchmark. Retrain without it and that ratio recovers to **~0.99**, at a
-test-AUC cost of just **0.0035** (0.6690 → 0.6654). The state label wasn't encoding Mississippi's
+test-AUC cost of just **0.0036** (0.6690 → 0.6654). The state label wasn't encoding Mississippi's
 economics; it was a geographic proxy the model leaned on as a shortcut. The shipped model omits it.
 (This is a redlining-*risk* analysis through geography, not a legal disparate-impact finding — see
 [What this isn't](#what-this-isnt).)
@@ -116,7 +116,7 @@ credit system.
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | Prototype reason codes / feature explanations for the shipped model |
-| **pytest** | 75 tests across the modeling layer |
+| **pytest** | 85 tests across the modeling layer |
 
 ---
 
@@ -124,7 +124,7 @@ credit system.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (75 passing)
+uv run pytest                                        # run the test suite (85 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
 uv run jupyter lab                                   # open the analysis notebook
@@ -155,5 +155,5 @@ src/           Modeling layer: data loading, validation, features, leakage check
                training, calibration, evaluation, fairness
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (75 passing)
+tests/         pytest suite (85 passing)
 ```

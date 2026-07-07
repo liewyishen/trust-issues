@@ -11,6 +11,7 @@ Run:  pytest tests/ -v
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -19,6 +20,8 @@ from src.leakage_check import (
     prove_forbidden_absent,
     check_temporal_consistency,
     flag_suspicious_auc,
+    single_feature_aucs,
+    check_single_feature_auc,
     DEFAULT_FORBIDDEN,
 )
 
@@ -157,3 +160,83 @@ class TestFlagSuspiciousAuc:
     def test_boundary_is_strict_greater_than(self):
         """Exactly at threshold is NOT flagged (strictly greater)."""
         assert flag_suspicious_auc({"a": 0.90}, threshold=0.90) == {}
+
+
+# ---------------------------------------------------------------------------
+# 5. single_feature_aucs + check_single_feature_auc — the computation half of
+# sentinel 4, and the fail-closed gate that lets the pipeline wire it in.
+# Same both-sides discipline: pass clean input AND fire on dirty input.
+# ---------------------------------------------------------------------------
+def _synthetic_frame(n: int = 400, seed: int = 0) -> pd.DataFrame:
+    """Mixed clean/leaky features around a binary target."""
+    rng = np.random.default_rng(seed)
+    y = rng.integers(0, 2, size=n)
+    nan_mask = rng.uniform(size=n) < 0.3
+    return pd.DataFrame({
+        "weak": 0.5 * y + rng.normal(0, 1.0, n),      # mild legitimate signal
+        "noise": rng.normal(0, 1.0, n),                # no signal at all
+        "leak": y + rng.normal(0, 0.01, n),            # numeric leak, AUC ~1
+        "anti_leak": -y + rng.normal(0, 0.01, n),      # negatively-oriented leak
+        "cat_leak": np.where(y == 1, "bad", "good"),   # categorical leak
+        "cat_ok": rng.choice(["a", "b", "c"], n),      # uninformative categorical
+        "with_nan": np.where(nan_mask, np.nan, 0.5 * y + rng.normal(0, 1.0, n)),
+        "constant": 1.0,                               # degenerate: single value
+        "Default": y,
+    })
+
+
+class TestSingleFeatureAucs:
+    def test_orientation_normalized_to_upper_half(self):
+        """max(auc, 1-auc): a protective/negative proxy must not hide below 0.5."""
+        df = _synthetic_frame()
+        aucs = single_feature_aucs(df, ["weak", "noise", "anti_leak"], "Default")
+        assert all(v >= 0.5 for v in aucs.values())
+        assert aucs["anti_leak"] > 0.95  # invisible to a >0.5-only detector
+
+    def test_categorical_target_encoding(self):
+        df = _synthetic_frame()
+        aucs = single_feature_aucs(
+            df, ["cat_leak", "cat_ok"], "Default",
+            categorical=["cat_leak", "cat_ok"],
+        )
+        assert aucs["cat_leak"] > 0.95
+        assert aucs["cat_ok"] < 0.7
+
+    def test_nan_rows_dropped_pairwise_without_crash(self):
+        df = _synthetic_frame()
+        aucs = single_feature_aucs(df, ["with_nan"], "Default")
+        assert 0.5 <= aucs["with_nan"] <= 1.0
+
+    def test_degenerate_feature_skipped_not_scored(self):
+        df = _synthetic_frame()
+        aucs = single_feature_aucs(df, ["constant", "noise"], "Default")
+        assert "constant" not in aucs
+        assert "noise" in aucs
+
+
+class TestCheckSingleFeatureAuc:
+    def test_clean_features_pass(self):
+        df = _synthetic_frame()
+        msg = check_single_feature_auc(
+            df, ["weak", "noise", "cat_ok"], "Default", categorical=["cat_ok"],
+        )
+        assert msg.startswith("OK")
+        assert "3 features checked" in msg
+
+    def test_numeric_leak_fails_closed(self):
+        df = _synthetic_frame()
+        with pytest.raises(ValueError, match="leak"):
+            check_single_feature_auc(df, ["weak", "leak"], "Default")
+
+    def test_all_violations_listed_at_once(self):
+        """Same discipline as check_forbidden_features: report everything."""
+        df = _synthetic_frame()
+        with pytest.raises(ValueError) as exc:
+            check_single_feature_auc(
+                df, ["leak", "anti_leak", "cat_leak"], "Default",
+                categorical=["cat_leak"],
+            )
+        message = str(exc.value)
+        assert "leak" in message
+        assert "anti_leak" in message
+        assert "cat_leak" in message

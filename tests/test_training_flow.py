@@ -27,6 +27,7 @@ from pipelines.training_flow import (
     calib_scalars,
     eval_scalars,
     fairness_scalars,
+    feature_date_columns,
 )
 
 
@@ -130,6 +131,38 @@ def test_fairness_scalars_handles_nan_verdict():
     result = _fairness_result(["confirmed proxy", float("nan"), "clear"])
     out = fairness_scalars(result)
     assert out["n_confirmed_proxy_states"] == 1.0
+
+
+# --- feature_date_columns (temporal-consistency sentinel arming) ---------------
+
+def test_feature_date_columns_empty_on_cleaned_frame():
+    """The cleaned dataset's shape: issue_d + issue_year + features, no other
+    date columns -- the sentinel must report 'nothing to check', not a false
+    positive on issue_d/issue_year themselves."""
+    df = pd.DataFrame({
+        "issue_d": pd.to_datetime(["2016-01-01"]),
+        "issue_year": [2016],
+        "fico_n": [700.0],
+    })
+    assert feature_date_columns(df) == []
+
+
+def test_feature_date_columns_detects_lc_naming_convention():
+    """A *_d column self-arms the sentinel even when it arrives as raw string."""
+    df = pd.DataFrame({
+        "issue_d": pd.to_datetime(["2016-01-01"]),
+        "last_credit_pull_d": ["2016-06-01"],
+    })
+    assert feature_date_columns(df) == ["last_credit_pull_d"]
+
+
+def test_feature_date_columns_detects_datetime_dtype():
+    """A datetime column self-arms the sentinel even without the *_d name."""
+    df = pd.DataFrame({
+        "issue_d": pd.to_datetime(["2016-01-01"]),
+        "some_event_time": pd.to_datetime(["2016-06-01"]),
+    })
+    assert feature_date_columns(df) == ["some_event_time"]
 
 
 # --- scalars are MLflow-loggable ----------------------------------------------

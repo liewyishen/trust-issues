@@ -102,9 +102,11 @@ pipeline now unifies all four stages' metrics into a **single**
 `lgbm_production` MLflow run (experiment `lc_default_risk`). The train step
 creates the run; the calibrate/evaluate/fairness steps reopen it by `run_id`
 and append their metrics, producing one complete experiment archive per model
-execution (24 metrics total: train/val/test AUC + PR-AUC, calibration Brier
+execution (25 metrics total: train/val/test AUC + PR-AUC, calibration Brier
 raw/cal, evaluation profit/approval/bad-rate, fairness AUC-with/no-state and
-cost). Zero `src/` changes — the logging lives entirely in the pipeline layer,
+cost, plus `fairness_audit_threshold` — the operating point Layer 1 was
+audited at, added by the audit-hardening pass recorded below). Zero `src/`
+changes — the logging lives entirely in the pipeline layer,
 which reads the metrics dicts the `src` functions already return.
 
 **TODO:** none currently.
@@ -179,3 +181,68 @@ getting worse.
 **TODO:** none. If the decision to restore `addr_state` is ever reconsidered,
 re-run `fairness.run_fairness_audit()` rather than assuming the historical
 numbers still hold.
+
+---
+
+## Audit hardening: three promise/implementation gaps closed
+
+**Date:** verified end-to-end against a full pipeline smoke run on the real
+CSV (Metaflow run `1783436074070472`, unified MLflow run `a8f8e800…`,
+experiment `lc_default_risk`). All numbers below come from that run's output,
+not from memory or earlier documents.
+
+**Finding:** a deep code audit found three places where the README's promises
+and the pipeline's implementation had drifted apart. For a project whose
+selling point is trust, closing promise/implementation gaps outranks adding
+features.
+
+1. **Leakage sentinels only half-wired.** README claimed "leakage *fails* the
+   pipeline", but `pipelines/training_flow.py`'s start step called only two of
+   `src/leakage_check.py`'s four sentinels (`check_forbidden_features`,
+   `prove_forbidden_absent`). `flag_suspicious_auc` (single-feature AUC > 0.90
+   red flag) and `check_temporal_consistency` (feature timestamp post-dating
+   the decision date) lived only in tests and notebook narrative — decoration,
+   by the leakage module's own standard.
+2. **Temporal check silently absent.** The cleaned dataset has no feature
+   timestamp column, so the temporal check could not run at all — and nothing
+   recorded that fact anywhere.
+3. **Fairness audited at a stale operating point.** `evaluate.py` selects the
+   operating threshold on Val (0.25 this run), but `fairness.py`'s Layer 1
+   audited at a hard-coded 0.26, and a stale comment still claimed
+   "evaluate.py does not exist as of this turn".
+
+**Disposition:**
+
+1. Sentinel 4 is now a fail-closed pipeline gate. `src/leakage_check.py` gains
+   `single_feature_aucs()` (numeric features ranked raw; categoricals
+   target-encoded; orientation normalized to `max(auc, 1 - auc)` so
+   negatively-oriented proxies cannot hide below 0.5; NaN rows dropped
+   pairwise; degenerate features skipped) and `check_single_feature_auc()`
+   (compute + flag + raise, all violations listed at once). Wired into the
+   start step BEFORE any training compute is spent — the check is model-free.
+   This run: "OK: no single feature exceeds standalone AUC 0.9 (8 features
+   checked)."
+2. Sentinel 3 now skips explicitly, never silently. `feature_date_columns()`
+   (pipeline layer, pure function) scans for datetime-typed or `*_d`-named
+   columns other than `issue_d`; if any exist, each is checked against
+   `issue_d` and violations fail the flow; if none exist (today's cleaned
+   data), the skip is printed with its reason. The sentinel self-arms the
+   moment a future join reintroduces a date column.
+3. The pipeline now passes evaluate's `best_threshold` into
+   `run_fairness_audit(audit_threshold=...)`, so Layer 1 audits at the model's
+   real operating point (0.25 this run; MS EO ratio 0.9945, all states clear),
+   and logs `fairness_audit_threshold` to MLflow next to the ratios it
+   qualifies. Layer 3's 0.22 is deliberately NOT aligned — the threshold sweep
+   found the disparity most visible there, and the constant's comment now says
+   so. The stale docstring is gone.
+
+All three fixes rewire the connection between promise and implementation —
+no model logic, feature engineering, split, or threshold-selection code was
+touched. Test suite: 75 → 85, every new guard tested on both sides (passes
+clean input, fires on dirty input).
+
+**TODO:** none here. The calibrated-mean-vs-actual gap this run reprints
+(mean_pred 0.1915 vs. actual test default rate 0.2323) is deliberately NOT
+"fixed" by this pass — it is a real 2016+ distribution-shift signal, not a
+bug, and belongs to the planned `pipelines/drift_check.py` (see the dti_n
+entry's still-live TODO above).

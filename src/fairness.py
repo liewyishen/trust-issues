@@ -96,16 +96,23 @@ EO_THRESHOLD = 0.80   # regulatory "80% rule" benchmark for the EO ratio
 MIN_N = 500           # states with fewer good-applicant rows are skipped (Layer 1)
 N_BOOT = 2000         # bootstrap resamples per state (Layer 1)
 
-# The notebook's operating threshold (~0.26) comes from a stylized cost
-# model in Section 8 (LGD=0.65, interest margin=0.12) chosen on Val. That
-# threshold-selection logic has no module of its own yet (src/evaluate.py
-# does not exist as of this turn), so this constant is a literal,
-# documented stand-in for "the operating threshold the notebook actually
-# used" -- not something this module derives itself. Pass audit_threshold
-# explicitly once evaluate.py owns real threshold selection.
+# Fallback operating threshold for DIRECT calls to run_fairness_audit()
+# (a notebook, a REPL -- anywhere with no pipeline context). Threshold
+# selection is owned by src/evaluate.py's select_threshold(), scanned on Val
+# under the stylized cost model (LGD=0.65, interest margin=0.12), and
+# pipelines/training_flow.py passes THAT best_threshold in as
+# audit_threshold -- so a pipeline run always audits Layer 1 at the model's
+# real operating point, never at this constant. 0.26 is kept only as the
+# documented notebook-era default for standalone use, not something this
+# module derives itself.
 DEFAULT_AUDIT_THRESHOLD = 0.26
 
 SWEEP_THRESHOLDS = [0.12, 0.15, 0.18, 0.20, 0.22, 0.26, 0.30]
+# Layer 3 deliberately audits at 0.22, NOT at the model's operating
+# threshold: Section 9.2's sweep found the state disparity most visible
+# there, and an ablation wants its comparison where the signal is strongest
+# -- see audit_layer3_ablation()'s docstring. Do not "align" this with
+# evaluate.py's best_threshold; the divergence is the point.
 ABLATION_THRESHOLD = 0.22
 WATCH_STATES = ["MS", "AL", "TN", "NV", "NE", "FL"]
 

@@ -70,48 +70,48 @@ from .train import _to_lgb_frame, _xy
 LGD = 0.65
 INT_MARGIN = 0.12
 
+# ---------------------------------------------------------------------------
+# PROFIT_OBJECTIVE -- which cost objective threshold selection optimizes. The
+# two objectives below have DIFFERENT break-even thresholds for a well-
+# calibrated p, and the difference is not cosmetic: it moves the chosen
+# operating point. Naming both, and switching between them with an explicit
+# constant, is what keeps that choice auditable instead of buried in one
+# summation. select_threshold / evaluate_at_threshold / run_evaluation all
+# forward an `objective` argument defaulting to this constant.
+#
+#   "pure_profit"  Originated-book P&L only: +margin on an approved good,
+#                  -LGD on an approved bad. A rejected loan never originates,
+#                  so it contributes nothing. For a well-calibrated p, approve
+#                  iff (1-p)*m - p*LGD > 0  <=>  p < m/(m+LGD) = 0.156.
+#
+#   "regret"       pure_profit MINUS the foregone interest margin on every
+#                  GOOD applicant that was rejected (an opportunity cost).
+#                  Because the total good margin G over the population is
+#                  fixed, rejected_good_margin = G - approved_good_margin, so
+#                  this objective equals  2*approved_good_margin
+#                  - approved_bad_LGD - G : it DOUBLE-WEIGHTS approving goods
+#                  relative to pure_profit. Break-even shifts to approve iff
+#                  (1-p)*m - p*LGD > -(1-p)*m  <=>  p < 2m/(2m+LGD) = 0.270.
+#
+# Default is "regret": every number the notebook, README, and
+# docs/data-decisions.md report (best_t ~0.25-0.26, approval ~78-80%,
+# improvement ~$185M) was computed under this objective -- best_t ~0.26 on the
+# real data matches 0.270, not 0.156, so the term was always there. Naming it
+# only makes the identity explicit; it does not change the shipped behavior.
+# Flip to "pure_profit" to select on originated-book P&L instead.
+PROFIT_OBJECTIVE = "regret"
+
 DEFAULT_THRESHOLDS = np.arange(0.05, 0.95, 0.01)
 NAIVE_THRESHOLD = 0.50
 
 
-def total_profit(loan_amt: np.ndarray, y: np.ndarray, approved: np.ndarray) -> float:
+def _profit_terms(loan_amt: np.ndarray, y: np.ndarray, approved: np.ndarray):
     """
-    Portfolio profit under the stylized cost model, for one particular
-    approve/reject decision vector. Mirrors notebooks/analysis.ipynb
-    Cell 31's total_profit() exactly.
-
-    Uses each loan's REAL loan_amnt, not a portfolio average -- a $35k loan
-    and a $1k loan carry very different absolute stakes for the same
-    approve/reject decision, and averaging away that spread would distort
-    which threshold looks optimal.
-
-    Three (and only three) outcomes carry a profit/cost; the fourth
-    (rejected bad borrower) is correctly a rejected loan that was never
-    originated, so it does not appear in the sum:
-      - approved, actually good (y == 0):  +loan_amt * INT_MARGIN
-        (interest margin earned)
-      - approved, actually bad  (y == 1):  -loan_amt * LGD
-        (principal lost to default)
-      - rejected, actually good (y == 0):  -loan_amt * INT_MARGIN
-        (opportunity cost: the interest margin this loan WOULD have earned)
-      - rejected, actually bad  (y == 1):   0
-        (correctly avoided; no cost, no profit)
-
-    Parameters
-    ----------
-    loan_amt : array-like of float
-        Original loan principal, one value per applicant.
-    y : array-like of 0/1
-        Actual outcome, 1 = defaulted.
-    approved : array-like of bool
-        The approve/reject decision being evaluated, one value per
-        applicant -- typically (p < threshold) for some calibrated
-        probability-of-default vector p.
-
-    Returns
-    -------
-    float
-        Total portfolio profit (can be negative) under this decision.
+    Shared per-loan terms + outcome masks for both profit objectives. Uses
+    each loan's REAL loan_amnt, not a portfolio average -- a $35k loan and a
+    $1k loan carry very different absolute stakes for the same approve/reject
+    decision, and averaging away that spread would distort which threshold
+    looks optimal.
     """
     loan_amt = np.asarray(loan_amt)
     y = np.asarray(y)
@@ -123,12 +123,98 @@ def total_profit(loan_amt: np.ndarray, y: np.ndarray, approved: np.ndarray) -> f
     approved_good = approved & (y == 0)
     approved_bad = approved & (y == 1)
     rejected_good = (~approved) & (y == 0)
+    return profit_good, cost_default, approved_good, approved_bad, rejected_good
 
+
+def pure_profit(loan_amt: np.ndarray, y: np.ndarray, approved: np.ndarray) -> float:
+    """
+    Originated-book P&L for one approve/reject decision vector. Only approved
+    loans originate, so only they carry a term:
+      - approved, good (y == 0):  +loan_amt * INT_MARGIN  (margin earned)
+      - approved, bad  (y == 1):  -loan_amt * LGD         (principal lost)
+      - rejected (either outcome):  0  (never originated)
+
+    Break-even for a well-calibrated p is m/(m+LGD) = 0.156. See
+    PROFIT_OBJECTIVE for how this differs from regret().
+    """
+    profit_good, cost_default, approved_good, approved_bad, _rej_good = _profit_terms(
+        loan_amt, y, approved
+    )
+    return float(profit_good[approved_good].sum() - cost_default[approved_bad].sum())
+
+
+def regret_profit(loan_amt: np.ndarray, y: np.ndarray, approved: np.ndarray) -> float:
+    """
+    pure_profit MINUS the foregone interest margin on every GOOD applicant
+    that was rejected (an opportunity cost). Four outcomes, only the last
+    carries no term:
+      - approved, good (y == 0):  +loan_amt * INT_MARGIN
+      - approved, bad  (y == 1):  -loan_amt * LGD
+      - rejected, good (y == 0):  -loan_amt * INT_MARGIN  (opportunity cost)
+      - rejected, bad  (y == 1):   0                      (correctly avoided)
+
+    This double-weights approving goods relative to pure_profit, moving
+    break-even to 2m/(2m+LGD) = 0.270. It is the objective the notebook and
+    README numbers were always computed under. See PROFIT_OBJECTIVE.
+    """
+    profit_good, cost_default, approved_good, approved_bad, rejected_good = _profit_terms(
+        loan_amt, y, approved
+    )
     return float(
         profit_good[approved_good].sum()
         - cost_default[approved_bad].sum()
         - profit_good[rejected_good].sum()
     )
+
+
+_PROFIT_OBJECTIVES = {"pure_profit": pure_profit, "regret": regret_profit}
+
+
+def total_profit(
+    loan_amt: np.ndarray,
+    y: np.ndarray,
+    approved: np.ndarray,
+    objective: str = PROFIT_OBJECTIVE,
+) -> float:
+    """
+    Portfolio objective for one approve/reject decision vector, dispatched to
+    the chosen cost `objective`. The public entry point every caller
+    (select_threshold, evaluate_at_threshold) imports; keeping the dispatch
+    here means the objective is chosen in exactly one place, not re-decided at
+    each call site.
+
+    Parameters
+    ----------
+    loan_amt : array-like of float
+        Original loan principal, one value per applicant.
+    y : array-like of 0/1
+        Actual outcome, 1 = defaulted.
+    approved : array-like of bool
+        The approve/reject decision being evaluated, one value per applicant
+        -- typically (p < threshold) for some calibrated PD vector p.
+    objective : str
+        "regret" (default, break-even 0.270) or "pure_profit" (break-even
+        0.156). See PROFIT_OBJECTIVE for the full semantic difference.
+
+    Returns
+    -------
+    float
+        Total portfolio value (can be negative) under this decision and
+        objective.
+
+    Raises
+    ------
+    ValueError
+        If `objective` is not a known objective name.
+    """
+    try:
+        fn = _PROFIT_OBJECTIVES[objective]
+    except KeyError:
+        raise ValueError(
+            f"Unknown profit objective {objective!r}; expected one of "
+            f"{sorted(_PROFIT_OBJECTIVES)}. See PROFIT_OBJECTIVE in evaluate.py."
+        )
+    return fn(loan_amt, y, approved)
 
 
 def _predict_calibrated(
@@ -177,6 +263,7 @@ def select_threshold(
     calibrator_path: str | Path | None = None,
     thresholds: np.ndarray = DEFAULT_THRESHOLDS,
     p_val: np.ndarray | None = None,
+    objective: str = PROFIT_OBJECTIVE,
 ) -> tuple[float, pd.DataFrame]:
     """
     Scan candidate thresholds on VALIDATION ONLY and return the
@@ -219,7 +306,7 @@ def select_threshold(
     y_val = splits["val"][TARGET].values
     loan_val = splits["val"]["loan_amnt"].values
 
-    profits = [total_profit(loan_val, y_val, p_val < t) for t in thresholds]
+    profits = [total_profit(loan_val, y_val, p_val < t, objective=objective) for t in thresholds]
     best_idx = int(np.argmax(profits))
     best_t = float(thresholds[best_idx])
 
@@ -234,6 +321,7 @@ def evaluate_at_threshold(
     calibrator_path: str | Path | None = None,
     p_test: np.ndarray | None = None,
     naive_threshold: float = NAIVE_THRESHOLD,
+    objective: str = PROFIT_OBJECTIVE,
 ) -> dict:
     """
     Apply best_t to TEST exactly once. Mirrors notebooks/analysis.ipynb
@@ -279,8 +367,8 @@ def evaluate_at_threshold(
     approved = p_test < best_t
     naive_approved = p_test < naive_threshold
 
-    test_profit = total_profit(loan_test, y_test, approved)
-    naive_profit = total_profit(loan_test, y_test, naive_approved)
+    test_profit = total_profit(loan_test, y_test, approved, objective=objective)
+    naive_profit = total_profit(loan_test, y_test, naive_approved, objective=objective)
 
     return {
         "threshold": best_t,
@@ -302,6 +390,7 @@ def run_evaluation(
     naive_threshold: float = NAIVE_THRESHOLD,
     p_val: np.ndarray | None = None,
     p_test: np.ndarray | None = None,
+    objective: str = PROFIT_OBJECTIVE,
 ) -> dict:
     """
     select_threshold() on Val, then evaluate_at_threshold() on Test exactly
@@ -361,11 +450,11 @@ def run_evaluation(
 
     best_t, val_profit_curve = select_threshold(
         splits, model_path=model_path, calibrator_path=calibrator_path,
-        thresholds=thresholds, p_val=p_val,
+        thresholds=thresholds, p_val=p_val, objective=objective,
     )
     result = evaluate_at_threshold(
         splits, best_t, model_path=model_path, calibrator_path=calibrator_path,
-        p_test=p_test, naive_threshold=naive_threshold,
+        p_test=p_test, naive_threshold=naive_threshold, objective=objective,
     )
 
     print(f"Threshold chosen on VAL: {best_t:.2f}\n")

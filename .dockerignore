@@ -1,0 +1,29 @@
+# The assessment data never enters the image. It is not needed to serve -- the
+# model is already trained -- and the brief is explicit that it must not be
+# redistributed. This is the first line of this file on purpose.
+data/
+
+# Everything else the image does not need.
+.venv/
+.git/
+.github/
+.claude/
+.metaflow/
+mlruns/
+mlflow.db*
+notebooks/
+figures/
+docs/
+tests/
+pipelines/
+__pycache__/
+**/__pycache__/
+*.py[oc]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+wheels/
+.DS_Store
+Thumbs.db

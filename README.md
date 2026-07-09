@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-149%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -43,7 +43,7 @@ trust beats a 0.99 you can't.**
 | **3. Point-in-time-safe features** | All features constructed from data available at application date only |
 | **4. Baseline-first modeling** | Logistic-regression baseline before LightGBM; no premature complexity |
 | **5. Calibration + cost-based thresholds** | Isotonic calibration on a disjoint calibration slice; operating threshold chosen by expected profit, not 0.5 |
-| **6. Explainability + fairness** | SHAP explanations (in `notebooks/analysis.ipynb` only — not part of the `src/` modeling layer or the pipeline); a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers 0.74 → 0.99 for an AUC cost of just 0.0036 |
+| **6. Explainability + fairness** | SHAP reason codes in `src/explain.py` — rank-ordered risk-increasing factors on the model's raw **log-odds** axis, never converted to probability contributions (that quantity is undefined here — see "What this isn't"); a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers 0.74 → 0.99 for an AUC cost of just 0.0036 |
 | **7. Drift monitoring** | A runnable yearly drift check (`pipelines/drift_check.py`): hand-rolled PSI + KS on `dti_n` per issue year against the training-years distribution, a separate 999-sentinel rate, a (100, 1000] tripwire share, and a per-year calibration gap scored with the shipped model. Validated against the dataset's own 2016+ DTI regime shift — the tripwire fires across all of 2016–2018, while the calibration-gap alarm fires on 2016–2017 (2018's gap flips slightly positive, +0.0154, staying under the alarm line); both are quiet on the 2015 baseline. A demonstrated capability on this dataset, not a live production monitoring service |
 
 ---
@@ -101,8 +101,15 @@ credit system.
   Real P&L needs term structure, pricing, servicing costs, and capital charges.
 - **Fairness audit uses geography as a proxy.** Without protected-class labels, it audits redlining
   risk through `addr_state` — not a legal disparate-impact determination.
-- **SHAP reason codes are prototypes.** Raw-score explanations need further mapping before they
-  could serve as ECOA-compliant adverse-action notices.
+- **SHAP contributions live on the raw log-odds axis, and cannot be moved off it.**
+  `src/explain.py` ships rank-ordered reason codes, not percentage-point attributions.
+  That is not a mapping left undone — the mapping does not exist. The shipped isotonic
+  calibrator is a 52-level step function whose slope is exactly zero across 99.31% of the
+  reject region, so "this feature added N points of default probability" has no value to
+  compute ([`docs/explainability.md`](docs/explainability.md), §4–§5). What survives both
+  the sigmoid and the isotonic step is the **sign and the rank** of each contribution, and
+  that is all this module reports. Whether a notice built on rank order alone satisfies
+  ECOA / Regulation B is a question for counsel — we are not lawyers.
 
 ---
 
@@ -117,8 +124,8 @@ credit system.
 | **Pandera** | Schema gate that *fails* the pipeline on contract violations (it caught the 495 DTI rows) |
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
-| **SHAP** | Prototype reason codes / feature explanations — **notebook-only** (`notebooks/analysis.ipynb`); not imported by the `src/` modeling layer or the pipeline |
-| **pytest** | 116 tests across the modeling layer |
+| **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests; not yet wired into the Metaflow pipeline |
+| **pytest** | 149 tests across the modeling layer |
 
 ---
 
@@ -126,7 +133,7 @@ credit system.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (116 passing)
+uv run pytest                                        # run the test suite (149 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
@@ -155,8 +162,8 @@ docs/          Detailed write-ups for each stage
 notebooks/     Exploratory analysis notebook (+ HTML export)
 pipelines/     Metaflow end-to-end training pipeline + the yearly dti_n drift check
 src/           Modeling layer: data loading, validation, features, leakage checks,
-               training, calibration, evaluation, fairness
+               training, calibration, evaluation, fairness, explanation
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (116 passing)
+tests/         pytest suite (149 passing)
 ```

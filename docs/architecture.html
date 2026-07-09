@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trust-issues — architecture</title>
+<style>
+  html,body{margin:0;padding:0;background:#0b0f14;color:#e6edf3;}
+  .bar{position:sticky;top:0;display:flex;align-items:center;gap:16px;
+       padding:10px 16px;background:#0d1117;border-bottom:1px solid #2d333b;
+       font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+       font-size:13px;color:#9198a1;z-index:2;}
+  .bar button{margin-left:auto;background:#1f6feb;color:#fff;border:0;border-radius:6px;
+       padding:7px 14px;font:600 13px system-ui,sans-serif;cursor:pointer;}
+  .bar button:hover{background:#2f81f7;}
+  .bar button:disabled{opacity:.6;cursor:wait;}
+  .wrap{padding:12px;}
+</style>
+</head>
+<body>
+<div class="bar">
+  <span>docs/architecture.html — the real wiring, traced from source (file:line on every box)</span>
+  <button id="exportBtn">Export as PNG</button>
+</div>
+<div class="wrap">
+<svg id="arch" xmlns="http://www.w3.org/2000/svg" width="1360" height="1072" viewBox="0 0 1360 1072"
+     role="img" aria-label="trust-issues architecture: Metaflow training flow, fail-closed gates, artifact contracts, and orphan modules">
+<style>
+  text{font-family:ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#adbac7;}
+  .sans{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;}
+  .title{font-size:17px;font-weight:700;fill:#e6edf3;}
+  .sub{font-size:10.5px;fill:#9198a1;}
+  .bt{font-size:11.5px;font-weight:700;fill:#e6edf3;}
+  .m10{font-size:10px;fill:#e6edf3;}
+  .m95{font-size:9.5px;fill:#adbac7;}
+  .m9{font-size:9px;fill:#9198a1;}
+  .m85{font-size:8.5px;fill:#9198a1;}
+  .m8{font-size:8px;fill:#9198a1;}
+  .lg{font-size:10px;}
+  .halt{fill:#f85149;}
+  .rep{fill:#58a6ff;}
+  .grey{fill:#8b949e;}
+  .wht{fill:#e6edf3;}
+  .ital{font-style:italic;}
+  .mid{text-anchor:middle;}
+  .end{text-anchor:end;}
+  .box{fill:#161c23;stroke:#444c56;}
+  .cont{fill:#0f141b;stroke:#2d333b;}
+  .scont{fill:#0d1219;stroke:#2d333b;}
+  .art{fill:#0e1319;stroke:#768390;}
+  .strip{fill:#12181f;stroke:#444c56;}
+  .orph{fill:#12161b;stroke:#8b949e;stroke-dasharray:6 4;}
+  .gr{fill:#201113;stroke:#f85149;stroke-width:2;}
+  .gb{fill:#0d1a2b;stroke:#58a6ff;stroke-width:2;}
+  .ef{stroke:#768390;stroke-width:1.5;fill:none;}
+  .eh{stroke:#f85149;stroke-width:1.5;fill:none;}
+  .eb{stroke:#58a6ff;stroke-width:1.5;fill:none;}
+  .eo{stroke:#8b949e;stroke-width:1.5;fill:none;stroke-dasharray:5 4;}
+</style>
+<defs>
+  <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#768390"/></marker>
+  <marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#f85149"/></marker>
+  <marker id="mb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#58a6ff"/></marker>
+  <marker id="mo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#8b949e"/></marker>
+</defs>
+
+<rect x="0" y="0" width="1360" height="1072" fill="#0b0f14"/>
+
+<!-- ======================= header ======================= -->
+<text class="sans title" x="24" y="28">trust-issues — the real wiring</text>
+<text class="sans sub end" x="1336" y="28">traced from source 2026-07-09 · HEAD b84dc97 · no box drawn from memory</text>
+
+<!-- ======================= legend ======================= -->
+<rect class="cont" x="16" y="40" width="1328" height="68" rx="8"/>
+<text class="m85 grey" x="28" y="58" style="letter-spacing:2px">LEGEND</text>
+<!-- row 1 -->
+<path class="gr" d="M108,60 L118,70 L108,80 L98,70 Z"/>
+<text class="sans lg halt" x="128" y="74">gate — ✕ raises, the run HALTS</text>
+<path class="gb" d="M418,60 L428,70 L418,80 L408,70 Z"/>
+<text class="sans lg rep" x="438" y="74">gate — ! reports / explicit SKIP, run continues</text>
+<line class="eh" x1="740" y1="70" x2="772" y2="70" marker-end="url(#mr)"/>
+<text class="sans lg halt" x="782" y="74">fail-closed binding — load ✕ raises on mismatch</text>
+<line class="eb" x1="1074" y1="70" x2="1106" y2="70" marker-end="url(#mb)"/>
+<text class="sans lg rep" x="1116" y="74">reporting only (MLflow metrics)</text>
+<!-- row 2 -->
+<line class="ef" x1="98" y1="94" x2="130" y2="94" marker-end="url(#mg)"/>
+<text class="sans lg grey" x="140" y="98">data / control flow</text>
+<line class="eo" x1="408" y1="94" x2="440" y2="94" marker-end="url(#mo)"/>
+<text class="sans lg grey" x="450" y="98">code-reuse import — not an invocation</text>
+<rect class="orph" x="740" y="85" width="26" height="17" rx="3"/>
+<text class="sans lg grey" x="776" y="98">not wired into the flow (orphan)</text>
+<text class="m95 wht" x="1074" y="98">file:line</text>
+<text class="sans lg grey" x="1136" y="98">= verified in source at that line</text>
+
+<!-- ======================= entry point ======================= -->
+<text class="m10" x="24" y="128">$ uv run python pipelines/training_flow.py run</text>
+<text class="m85" x="340" y="128">README.md:28 · :137 — __main__ guard training_flow.py:380</text>
+<line class="ef" x1="40" y1="133" x2="40" y2="146" marker-end="url(#mg)"/>
+
+<!-- ======================= flow container ======================= -->
+<rect class="cont" x="16" y="150" width="1328" height="440" rx="8"/>
+<text class="bt" x="28" y="170">pipelines/training_flow.py — TrainingFlow(FlowSpec)  (:194)</text>
+<text class="sans sub" x="470" y="170">linear: start → train → calibrate → evaluate → fairness → end · each step runs in its own subprocess; state crosses via the .metaflow/ datastore</text>
+
+<!-- @start (XML: no double hyphen inside comments, or serialization breaks PNG export) -->
+<rect class="scont" x="32" y="184" width="1296" height="234" rx="6"/>
+<text class="bt" x="44" y="204">@start  (:206–:279)</text>
+<text class="sans sub" x="210" y="204">load → validate → prove-no-leakage → split</text>
+
+<!-- csv box -->
+<rect class="box" x="44" y="228" width="140" height="48" rx="5"/>
+<text class="m9 mid wht" x="114" y="241">data/LC_loans_</text>
+<text class="m9 mid wht" x="114" y="252">granting_model_</text>
+<text class="m9 mid wht" x="114" y="263">dataset.csv</text>
+<text class="m8 mid" x="114" y="273">(data_loader.py:35)</text>
+
+<line class="ef" x1="184" y1="252" x2="245" y2="252" marker-end="url(#mg)"/>
+<text class="m85 mid" x="215" y="245">load_raw() :220</text>
+
+<!-- gate: validation -->
+<path class="gr" d="M265,228 L283,252 L265,276 L247,252 Z"/>
+<text class="m10 mid halt" x="265" y="256.5">✕</text>
+<text class="m95 mid wht" x="265" y="292">validate_loan_data</text>
+<text class="m85 mid" x="265" y="304">load_raw → data_loader.py:117</text>
+<text class="m85 mid halt" x="265" y="316">✕ SchemaErrors — HALT</text>
+<text class="m85 mid" x="265" y="328">(data_validation.py:191, pandera)</text>
+
+<line class="ef" x1="283" y1="252" x2="435" y2="252" marker-end="url(#mg)"/>
+
+<!-- gate: sentinel 1 -->
+<path class="gr" d="M455,228 L473,252 L455,276 L437,252 Z"/>
+<text class="m10 mid halt" x="455" y="256.5">✕</text>
+<text class="m95 mid wht" x="455" y="292">check_forbidden_features</text>
+<text class="m85 mid" x="455" y="304">flow :227 → leakage_check.py:70</text>
+<text class="m85 mid halt" x="455" y="316">✕ ValueError :110 — HALT</text>
+
+<line class="ef" x1="473" y1="252" x2="625" y2="252" marker-end="url(#mg)"/>
+
+<!-- gate: sentinel 2 -->
+<path class="gr" d="M645,228 L663,252 L645,276 L627,252 Z"/>
+<text class="m10 mid halt" x="645" y="256.5">✕</text>
+<text class="m95 mid wht" x="645" y="292">prove_forbidden_absent</text>
+<text class="m85 mid" x="645" y="304">flow :228 → leakage_check.py:118</text>
+<text class="m85 mid halt" x="645" y="316">✕ ValueError :168 — HALT</text>
+
+<line class="ef" x1="663" y1="252" x2="815" y2="252" marker-end="url(#mg)"/>
+
+<!-- gate: sentinel 3 (skip) -->
+<path class="gb" d="M835,228 L853,252 L835,276 L817,252 Z"/>
+<text class="m10 mid rep" x="835" y="256.5">!</text>
+<text class="m95 mid wht" x="835" y="292">check_temporal_consistency</text>
+<text class="m85 mid" x="835" y="304">flow :241 → leakage_check.py:176</text>
+<text class="m85 mid rep" x="835" y="316">! SKIP — no date columns (:257)</text>
+<text class="m8 mid halt" x="835" y="328">self-arms → ✕ raise :246 on any date col</text>
+
+<line class="ef" x1="853" y1="252" x2="918" y2="252" marker-end="url(#mg)"/>
+
+<!-- temporal_split -->
+<rect class="box" x="920" y="228" width="170" height="48" rx="5"/>
+<text class="m10 mid" x="1005" y="243">temporal_split()</text>
+<text class="m9 mid" x="1005" y="256">→ self.splits  (:265)</text>
+<text class="m9 mid" x="1005" y="269">data_loader.py:122</text>
+<line class="ef" x1="1005" y1="276" x2="1005" y2="344" marker-end="url(#mg)"/>
+
+<line class="ef" x1="1090" y1="252" x2="1140" y2="252" marker-end="url(#mg)"/>
+
+<!-- gate: sentinel 4 -->
+<path class="gr" d="M1160,228 L1178,252 L1160,276 L1142,252 Z"/>
+<text class="m10 mid halt" x="1160" y="256.5">✕</text>
+<text class="m95 mid wht" x="1160" y="292">check_single_feature_auc</text>
+<text class="m85 mid" x="1160" y="304">flow :274 → leakage_check.py:321</text>
+<text class="m85 mid halt" x="1160" y="316">AUC &gt; 0.90 ⇒ ✕ ValueError :364 — HALT</text>
+<text class="m85 mid" x="1160" y="328">(on the engineered train split)</text>
+
+<!-- exit @start → @train -->
+<path class="ef" d="M1178,252 L1290,252 L1290,432 L160,432 L160,446" marker-end="url(#mg)"/>
+<text class="m85 mid" x="725" y="426">self.next(self.train)  (:279)  ·  self.splits pickled between step subprocesses via the .metaflow/ datastore  (:199–:200)</text>
+
+<!-- splits strip -->
+<rect class="strip" x="40" y="348" width="200" height="44" rx="4"/>
+<text class="m95 mid wht" x="140" y="365">train · 2007–2014</text>
+<text class="m9 mid" x="140" y="379">n≈453,804 · dr≈0.1702</text>
+<rect class="strip" x="248" y="348" width="200" height="44" rx="4"/>
+<text class="m95 mid wht" x="348" y="365">val · 2015 shuffled[:40k]</text>
+<text class="m9 mid" x="348" y="379">n=40,000 · dr≈0.2057</text>
+<rect class="strip" x="456" y="348" width="200" height="44" rx="4"/>
+<text class="m95 mid wht" x="556" y="365">calib · 2015 [40k:80k]</text>
+<text class="m9 mid" x="556" y="379">n=40,000 · dr≈0.2020</text>
+<rect class="strip" x="664" y="348" width="200" height="44" rx="4"/>
+<text class="m95 mid wht" x="764" y="365">test · 2016–2017</text>
+<text class="m9 mid" x="764" y="379">n≈462,174 · dr≈0.2323</text>
+<rect class="strip" x="872" y="348" width="200" height="44" rx="4"/>
+<text class="m95 mid wht" x="972" y="365">holdout_2018 · 2018</text>
+<text class="m9 mid" x="972" y="379">n≈56,160 · dr≈0.1575</text>
+<text class="m85" x="40" y="410">years: data_loader.py:42–45 · N_VAL=40,000 :49 · seed 42 :37 · shuffle+slice :152–:157 · counts from :144–:149 (“approximately”) · 2018 kept out of Test — suspected right-censoring (:129–:132)</text>
+
+<!-- steps row -->
+<rect class="box" x="40" y="450" width="240" height="120" rx="6"/>
+<text class="bt" x="52" y="468">@train  (:281)</text>
+<text class="m9" x="52" y="484">train_and_save() → src/train.py:371</text>
+<text class="m9" x="52" y="497">LR baseline + production LightGBM</text>
+<text class="m9" x="52" y="510">MLflow: lr_baseline run (train.py:408)</text>
+<text class="m9" x="52" y="523">+ lgbm_production run (train.py:427)</text>
+<text class="m9" x="52" y="536">prod run re-found by recency (:291)</text>
+<text class="m9" x="52" y="549">writes models/lgbm_model.pkl</text>
+<text class="m9" x="52" y="562">(train.py:483 · copied to MLflow :490)</text>
+
+<line class="ef" x1="280" y1="510" x2="298" y2="510" marker-end="url(#mg)"/>
+
+<rect class="box" x="300" y="450" width="240" height="120" rx="6"/>
+<text class="bt" x="312" y="468">@calibrate  (:296)</text>
+<text class="m9" x="312" y="484">calibrate_model() → src/calibrate.py:99</text>
+<text class="m9" x="312" y="497">isotonic fit on Calib, scored on Test</text>
+<text class="m9" x="312" y="510">(calibrate.py:171–:181)</text>
+<text class="m9" x="312" y="523">writes models/isotonic_calibrator.pkl</text>
+<text class="m9" x="312" y="536">(calibrate.py:239)</text>
+<text class="m9" x="312" y="549">appends 7 metrics → prod run (:304)</text>
+
+<line class="ef" x1="540" y1="510" x2="558" y2="510" marker-end="url(#mg)"/>
+
+<rect class="box" x="560" y="450" width="240" height="120" rx="6"/>
+<text class="bt" x="572" y="468">@evaluate  (:307)</text>
+<text class="m9" x="572" y="484">run_evaluation() → src/evaluate.py:386</text>
+<text class="m9" x="572" y="497">select_threshold on Val (evaluate.py:305)</text>
+<text class="m9" x="572" y="510">evaluate_at_threshold on Test — once</text>
+<text class="m9" x="572" y="523">appends 7 profit metrics (:315)</text>
+
+<line class="ef" x1="800" y1="510" x2="818" y2="510" marker-end="url(#mg)"/>
+
+<rect class="box" x="820" y="450" width="240" height="120" rx="6"/>
+<text class="bt" x="832" y="468">@fairness  (:318)</text>
+<text class="m9" x="832" y="484">run_fairness_audit() → src/fairness.py:494</text>
+<text class="m9" x="832" y="497">at evaluate's best_threshold (:336)</text>
+<text class="m9" x="832" y="510">Layer 3 ablation retrains 2 models (:375)</text>
+<text class="m9 grey" x="832" y="523">⊘ shipped calibrator NEVER loaded here —</text>
+<text class="m9 grey" x="832" y="536">refits isotonic (fairness.py:586–:587)</text>
+<text class="m9" x="832" y="549">appends 4 metrics + threshold (:341–:344)</text>
+
+<line class="ef" x1="1060" y1="510" x2="1078" y2="510" marker-end="url(#mg)"/>
+
+<rect class="box" x="1080" y="450" width="240" height="120" rx="6"/>
+<text class="bt" x="1092" y="468">@end  (:347)</text>
+<text class="m9" x="1092" y="484">console summary only</text>
+<text class="m9" x="1092" y="497">no writes · no MLflow calls</text>
+
+<!-- ======================= MLflow bus (blue, reporting) ======================= -->
+<line class="eb" x1="120" y1="570" x2="120" y2="612"/>
+<line class="eb" x1="360" y1="570" x2="360" y2="612"/>
+<line class="eb" x1="620" y1="570" x2="620" y2="612"/>
+<line class="eb" x1="880" y1="570" x2="880" y2="612"/>
+<line class="eb" x1="120" y1="612" x2="1185" y2="612"/>
+<line class="eb" x1="1185" y1="612" x2="1185" y2="668" marker-end="url(#mb)"/>
+<text class="m9 mid rep" x="640" y="602">reporting only — log_metrics_to_run (training_flow.py:99) appends onto the lgbm_production run</text>
+
+<!-- ======================= writes (grey) ======================= -->
+<line class="ef" x1="240" y1="570" x2="240" y2="668" marker-end="url(#mg)"/>
+<text class="m85 end" x="234" y="666">writes (train.py:483)</text>
+<line class="ef" x1="535" y1="570" x2="535" y2="668" marker-end="url(#mg)"/>
+<text class="m85" x="543" y="666">writes (calibrate.py:239)</text>
+
+<!-- ======================= contract buses (red, fail-closed) ======================= -->
+<!-- model.pkl → upward consumers -->
+<line class="eh" x1="310" y1="672" x2="310" y2="630"/>
+<line class="eh" x1="310" y1="630" x2="960" y2="630"/>
+<line class="eh" x1="440" y1="630" x2="440" y2="574" marker-end="url(#mr)"/>
+<line class="eh" x1="660" y1="630" x2="660" y2="574" marker-end="url(#mr)"/>
+<line class="eh" x1="960" y1="630" x2="960" y2="574" marker-end="url(#mr)"/>
+<text class="m85 mid halt" x="440" y="643">calibrate.py:162</text>
+<text class="m85 mid halt" x="660" y="643">evaluate.py:247</text>
+<text class="m85 mid halt" x="960" y="643">fairness.py:573</text>
+<!-- calibrator.pkl → upward consumer -->
+<line class="eh" x1="710" y1="672" x2="710" y2="654"/>
+<line class="eh" x1="710" y1="654" x2="740" y2="654"/>
+<line class="eh" x1="740" y1="654" x2="740" y2="574" marker-end="url(#mr)"/>
+<text class="m85 halt" x="750" y="658">evaluate.py:253</text>
+
+<!-- ======================= artifacts ======================= -->
+<rect class="art" x="130" y="672" width="360" height="96" rx="6"/>
+<text class="bt" x="142" y="690">models/lgbm_model.pkl</text>
+<text class="m9" x="142" y="704">dict: booster + FEATURES + CATEGORICAL</text>
+<text class="m9" x="142" y="717">+ category_maps + best_iteration + trained_at</text>
+<text class="m9" x="142" y="730">(train.py:472–:483)</text>
+<text class="m9 halt" x="142" y="746">loaded ONLY via load_model_artifact() —</text>
+<text class="m9 halt" x="142" y="759">✕ raises on feature-contract mismatch (train.py:495)</text>
+
+<rect class="art" x="530" y="672" width="360" height="96" rx="6"/>
+<text class="bt" x="542" y="690">models/isotonic_calibrator.pkl</text>
+<text class="m9" x="542" y="704">dict: calibrator + model_path + model_trained_at</text>
+<text class="m9" x="542" y="717">(calibrate.py:229–:239)</text>
+<text class="m9 halt" x="542" y="746">loaded via load_calibrator(model_artifact=…) —</text>
+<text class="m9 halt" x="542" y="759">✕ raises on stale trained_at (calibrate.py:56, :88)</text>
+
+<rect class="art" x="1040" y="672" width="290" height="96" rx="6"/>
+<text class="bt" x="1052" y="690">mlflow.db  (sqlite)</text>
+<text class="m9" x="1052" y="704">URI pinned: training_flow.py:59 · train.py:84</text>
+<text class="m9" x="1052" y="717">runs: lr_baseline · lgbm_production</text>
+<text class="m9" x="1052" y="730">(+ calibrate / evaluate / fairness appends)</text>
+<text class="m9 rep" x="1052" y="746">drift_check — its own run (:549–:551),</text>
+<text class="m9 rep" x="1052" y="759">never appended onto lgbm_production (:43–:45)</text>
+
+<!-- ======================= orphan container (painted FIRST so edges land on top) ======================= -->
+<rect class="orph" x="16" y="800" width="1328" height="232" rx="8"/>
+
+<!-- ======================= contracts down to orphans (red) ======================= -->
+<line class="eh" x1="250" y1="768" x2="250" y2="826" marker-end="url(#mr)"/>
+<text class="m85 halt" x="258" y="812">model.pkl → :529</text>
+<path class="eh" d="M440,768 L440,796 L1000,796 L1000,826" marker-end="url(#mr)"/>
+<text class="m85 halt" x="1006" y="788">model.pkl → :379 / :580</text>
+<line class="eh" x1="600" y1="768" x2="600" y2="826" marker-end="url(#mr)"/>
+<text class="m85 halt end" x="592" y="812">calibrator.pkl → :530</text>
+<line class="eh" x1="800" y1="768" x2="800" y2="826" marker-end="url(#mr)"/>
+<text class="m85 halt" x="808" y="788">calibrator.pkl → :384 / :583</text>
+
+<!-- drift_check → mlflow (blue) -->
+<path class="eb" d="M648,830 L648,816 L1250,816 L1250,772" marker-end="url(#mb)"/>
+<text class="m85 mid rep" x="898" y="808">drift's own MLflow run (:549–:551)</text>
+
+<!-- drift_check imports helpers from training_flow (dashed grey) -->
+<line class="eo" x1="105" y1="830" x2="105" y2="594" marker-end="url(#mo)"/>
+
+<!-- ======================= orphans ======================= -->
+<rect class="orph" x="40" y="830" width="620" height="170" rx="6"/>
+<text class="bt" x="52" y="850">pipelines/drift_check.py</text>
+<text class="m85 grey ital end" x="648" y="850">not wired into the flow</text>
+<text class="m95 wht" x="52" y="868">$ uv run python pipelines/drift_check.py      README.md:138 · __main__ :563</text>
+<text class="m9" x="52" y="882">separate MANUAL entry point — run_drift_check() (:458); nothing schedules it</text>
+<text class="m9" x="52" y="896">signals: PSI · KS · sentinel_rate · tripwire (100,1000] · calib_gap — dti_n per issue_year (:14–:34)</text>
+<text class="m9 rep" x="52" y="910">REPORTS, does NOT raise — fail_on_alarm=False by default (:468, :494–:497); alarms are the product</text>
+<text class="m9" x="52" y="924">scores every year with the SHIPPED artifacts — loads both, contract-checked (:529–:530); never refits</text>
+<text class="m9 rep" x="52" y="938">logs to its own MLflow run 'drift_check' (:100, :549–:551) — never onto lgbm_production (:43–:45)</text>
+<text class="m85 grey" x="52" y="952">⇡ dashed edge: imports configure_mlflow + log_metrics_to_run from training_flow.py (:76) — code reuse, not invocation</text>
+
+<rect class="orph" x="700" y="830" width="480" height="170" rx="6"/>
+<text class="bt" x="712" y="850">src/explain.py</text>
+<text class="m85 grey ital end" x="1168" y="850">not wired into the flow</text>
+<text class="m9" x="712" y="868">SHAP reason codes on the raw log-odds axis — rank-ordered, scale declared</text>
+<text class="m9" x="712" y="882">no __main__ — not runnable as a script</text>
+<text class="m9" x="712" y="896">only importer in the repo: tests/test_explain.py:43</text>
+<text class="m9" x="712" y="910">loads BOTH shipped artifacts, contract-checked (:379–:384 / :580–:583)</text>
+<text class="m9" x="712" y="924">callers today: pytest · manual import · a notebook — nothing else</text>
+
+<text class="sans sub grey" x="28" y="1022" style="font-weight:700">NOT WIRED INTO THE FLOW — nothing invokes these automatically: no CI, no cron, no scheduler exists in this repo</text>
+
+<!-- ======================= footer ======================= -->
+<text class="m85" x="24" y="1058">sources read for this diagram: pipelines/training_flow.py · pipelines/drift_check.py · src/{data_loader, data_validation, leakage_check, train, calibrate, evaluate, fairness, explain}.py · README.md — traced 2026-07-09 at HEAD b84dc97</text>
+</svg>
+</div>
+
+<script>
+async function buildPNG(scale = 2) {
+  // XMLSerializer -> data: URL -> Image -> canvas -> toBlob.
+  // The SVG carries its own <style> and uses no foreignObject, so the
+  // serialized document is self-contained and rasterizes in any browser.
+  const svg = document.getElementById('arch');
+  const xml = new XMLSerializer().serializeToString(svg);
+  const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('SVG rasterization failed'));
+    img.src = url;
+  });
+  const w = svg.viewBox.baseVal.width, h = svg.viewBox.baseVal.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0b0f14';                    // opaque background, not transparent
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+  if (!blob) throw new Error('canvas.toBlob returned null');
+  return { blob, width: canvas.width, height: canvas.height };
+}
+
+document.getElementById('exportBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('exportBtn');
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Rendering…';
+    const { blob } = await buildPNG(2);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'trust-issues-architecture.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    btn.textContent = 'Export as PNG';
+  } catch (e) {
+    btn.textContent = 'Export failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Self-test hook: open with ?autotest — runs the exact export path
+// (serialize -> rasterize -> canvas -> toBlob) minus the download click,
+// and reports the outcome in document.title for headless verification.
+if (location.search.includes('autotest')) {
+  buildPNG(2)
+    .then(r => { document.title = 'EXPORT_OK ' + r.width + 'x' + r.height + ' bytes=' + r.blob.size; })
+    .catch(e => { document.title = 'EXPORT_FAIL ' + e.message; });
+}
+</script>
+</body>
+</html>

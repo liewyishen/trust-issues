@@ -451,3 +451,66 @@ re-run `run_evaluation()` and update EVERY threshold-dependent number in
 this doc and the README (best_t, approval rate, bad rates, improvement) --
 they are all objective-specific, and the historical `regret` figures do
 not carry over.
+
+---
+
+## The addr_state AUC cost now has a single authoritative value: 0.6690 → 0.6654, cost -0.0036
+
+**Date:** 2026-07-09. Read from a full real-data pipeline run -- Metaflow
+run-id `1783580432440889`, unified MLflow run
+`cca4c361615c460b999ce1a73bd46439`, experiment `lc_default_risk`. Every
+number below comes from that run's logged MLflow metrics at full double
+precision (`repr`, not the terminal's four-decimal print, not memory).
+
+**Finding:** the Layer-3 ablation AUC cost of dropping `addr_state` was
+written two ways across the repo -- the README said 0.0036 (with-state AUC
+0.6690), while `src/fairness.py`'s two docstrings said 0.0035 (with-state
+AUC 0.6689). Line 127 of this file honestly recorded BOTH roundings
+(`0.6689/0.6690 -> -0.0035 to -0.0036`) because no single run had ever been
+pinned as authoritative: the terminal only prints four decimals, which
+cannot distinguish 0.6689 from 0.6690. The disagreement was pure
+fourth-decimal rounding of one number, never a disagreement about the
+model.
+
+**Resolution -- the authoritative full-precision values from run
+`cca4c361`:**
+
+```
+auc_with_state = 0.6690306566920463      (rounds to 0.6690)
+auc_no_state   = 0.6654356816065161      (rounds to 0.6654)
+auc_cost       = -0.0035949750855301943  (rounds to -0.0036; equals
+                                          auc_no_state - auc_with_state
+                                          to full precision)
+```
+
+The correct four-decimal figures are **with-state 0.6690, cost -0.0036**.
+The with-state AUC is 0.66903 -- about 8e-5 above the 0.66895 boundary
+between 0.6689 and 0.6690, an unambiguous round-up, NOT a 0.66895 midpoint
+tie. This vindicates the README (already 0.6690 / 0.0036, left untouched)
+and identifies `src/fairness.py`'s `0.6689` / `~-0.0035` as the stale side;
+fairness.py was corrected to 0.6690 / -0.0036 to match. The notebook is a
+with-state historical artifact and was deliberately not touched.
+
+**Line 127 of this file is kept as-is, NOT edited.** Its double-valued
+range truthfully records the repo's state BEFORE this run existed -- two
+roundings coexisting with no authoritative source to choose between them.
+Overwriting it in place would falsify that history and break this file's
+append-only rule. This entry is the authoritative pointer from here on;
+line 127 stands as the historical record of the ambiguity before it was
+resolved.
+
+**Reproducibility, worth recording in its own right:** every
+threshold-dependent number this run produced is identical to the prior
+real-data run already documented above -- threshold 0.25, test profit
+-$288,367,478, improvement over naive $184,820,340, approval 78.0%, bad
+rate approved 18.9% / rejected 38.5%, Brier 0.1717 -> 0.1692, mean_pred
+0.1915 vs. actual 0.2323, Layer 1 @ 0.25 all states clear. MS's Layer-3
+EO recovery is 0.744823 -> 0.987926, inside the 0.734-0.745 / 0.988-0.990
+spread this doc recorded earlier. The pipeline reproduces exactly; the only
+thing that ever "moved" between documents was which fourth-decimal rounding
+of the with-state AUC a given file happened to quote.
+
+**TODO:** none. If the model is ever retrained, re-read
+`auc_with_state`/`auc_no_state` from that run's MLflow metrics (not the
+terminal, not this doc) and re-standardize the README and `src/fairness.py`
+to the new authoritative values.

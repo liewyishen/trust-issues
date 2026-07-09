@@ -69,7 +69,7 @@ On the real dataset, this reproduces the notebook's headline finding: at
 threshold 0.22, Mississippi's Equal Opportunity ratio is ~0.734 with
 addr_state in the model, and recovers to ~0.990 once addr_state is removed
 -- the state label was a shortcut, not a reflection of MS applicants'
-actual financials. The AUC cost of removing addr_state is small (~-0.0035).
+actual financials. The AUC cost of removing addr_state is small (~-0.0036).
 See run_fairness_audit()'s docstring for the full numbers.
 """
 
@@ -511,9 +511,9 @@ def run_fairness_audit(
     and compares a with-state model against a no-state model, regardless of
     which one that happens to be (see audit_layer3_ablation). On the real
     dataset, Layer 3 (threshold=0.22) reproduces approximately:
-        Test AUC  WITH state: 0.6689
+        Test AUC  WITH state: 0.6690
         Test AUC  NO   state: 0.6654
-        AUC cost of dropping state: -0.0035
+        AUC cost of dropping state: -0.0036
 
         state    WITH state    NO state    verdict
         MS            0.734       0.990    fixed by removal (shortcut / geographic-proxy risk)

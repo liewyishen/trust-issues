@@ -617,3 +617,56 @@ Recorded, not resolved. Nothing below should be treated as decided.
   (`notebooks/analysis.ipynb:1723-1735`). Any explanation-related number
   quoted from this project should trace to that cell, or to a fresh run --
   never to the scratch notes.
+
+---
+
+## 9. Appended note: a latent `IndexError` in the notebook's SHAP cell
+
+Found while writing `src/explain.py` (Batch C, Step 3). Recorded here rather
+than fixed; the notebook is a historical artifact and nothing in `src/` depends
+on it.
+
+`shap.TreeExplainer.expected_value` **is mutated by `shap_values()`**. Before
+the first call it is a length-1 `ndarray`; after the call it is a scalar
+`np.float64`. Verified against the shipped booster under `shap==0.50.0`:
+
+```
+at construction:  ndarray  array([-1.69927944])   size 1
+after shap_values():       np.float64(-1.6992794393197017)
+```
+
+The notebook's global SHAP cell reads it like this:
+
+```python
+# notebooks/analysis.ipynb:1675-1680
+explainer = shap.TreeExplainer(model_ns)
+sv = explainer.shap_values(X_shap)                       # :1676
+shap_default = sv[1] if isinstance(sv, list) else sv
+base_value = (explainer.expected_value[1]                # :1678
+              if isinstance(explainer.expected_value, (list, np.ndarray))
+              else explainer.expected_value)
+```
+
+The `isinstance(..., np.ndarray)` branch at `:1678` indexes `[1]` on what it
+believes is a two-element per-class array. At construction that array has
+**length 1**, so `expected_value[1]` raises:
+
+```
+IndexError: index 1 is out of bounds for axis 0 with size 1
+```
+
+The cell only works because `shap_values()` on line `:1676` runs first and
+collapses `expected_value` to a scalar, which sends `:1678` down the `else`
+branch instead. **The correctness of that cell is a property of its line
+order, not of its logic.** Move the `base_value` assignment above the
+`shap_values` call -- a refactor with no obvious hazard -- and it raises.
+
+`src/explain.py` avoids this structurally rather than by ordering luck:
+`_shap_matrix()` reads `expected_value` only after the `shap_values()` call it
+made itself, normalizes size-1 and size-2 arrays explicitly, and raises a named
+`ValueError` on any other size instead of indexing blind.
+`tests/test_explain.py` pins the read-after-call ordering with a stub explainer
+that reproduces the mutation.
+
+Not fixed in the notebook. Flagged so the next person to touch that cell knows
+what they are standing on.

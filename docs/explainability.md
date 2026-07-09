@@ -15,6 +15,56 @@ or chosen here; the open questions at the end are left open on purpose.
 
 ---
 
+## TL;DR — read this first
+
+This file is an investigation log, written in the order things were learned.
+Later sections overturn earlier ones. Read this block before trusting any
+section in isolation.
+
+- **What ships.** Rank-ordered reason codes on the model's raw **log-odds
+  margin** — the sign and the order of each feature's contribution. The scale
+  is declared twice over, in a top-level `scale` field and inside every key
+  name (`contribution_log_odds`). **No probability-scale attribution is
+  produced**, and no `contribution_to_probability` key exists to be filled in
+  later. (§5, §6)
+- **Why not probability points.** The shipped calibrator is a 52-level step
+  function. `dp_cal/dp_raw` is exactly zero across **99.31%** of the reject
+  region, and **99.91%** of scored Test applicants sit on a flat block — only
+  **416 of 462,174** land on a ramp. "This feature added N points of default
+  probability" has no value to compute. It is not a mapping left undone; the
+  mapping does not exist. (§4, §5; measured in §7a)
+- **§7 is superseded by §7a. Do not read §7 as a conclusion.** It records what
+  was believed *before* the trade-off was measured, and its central assumption
+  was wrong — not about the magnitude, about the **sign**. It is preserved, not
+  corrected, because being wrong in writing is the point of a log. §7a is the
+  finding.
+- **What §7a actually found.** Platt scaling and beta calibration are *better*
+  calibrated than isotonic — on Test and on the 2018 holdout, across 10
+  calibration-slice refits, with **0 of 40** sign flips. The effect is small
+  (**0.0505%** to **0.1041%** of Brier). That makes smooth calibration a free
+  option, not a reason to swap: the argument for swapping, if there is one, is
+  differentiability, which Brier neither supports nor opposes. (§7a)
+- **Nothing about the calibrator is decided.** §8's open questions are open.
+  Whether the shipped calibrator should be replaced, and whether serving needs
+  numeric contributions at all or rank-ordered codes suffice, are recorded as
+  undecided — §7a establishes only that a swap would cost nothing on Brier,
+  which is a fact about calibration quality, not a decision about a shipped
+  artifact. (§8)
+- **Additivity is enforced, not assumed.** `base_value + sum(contributions)`
+  IS the raw margin, and `src/explain.py` now proves it at run time against
+  `booster.predict(raw_score=True)` rather than trusting shap's
+  `check_additivity`, which is inert on the LightGBM path. (§6, §10)
+- **The explainer is a wrapper.** `TreeExplainer.shap_values()` on this booster
+  is one `booster.predict(pred_contrib=True)` call — bit-identical, **0 of
+  1600** differing cells across 200 rows × 8 features — behind a ~65 ms
+  construction whose product that path never reads. Migrating away is costed
+  and **deliberately not done**. (§10)
+- **One latent bug is flagged, not fixed.** The notebook's SHAP cell is correct
+  only by accident of line order; moving one assignment above another raises
+  `IndexError`. `src/explain.py` avoids it structurally. (§9)
+
+---
+
 ## 1. The gap
 
 SHAP, as currently used, explains a different quantity than the one the
@@ -338,6 +388,9 @@ qualified to give it. The notebook's existing disclaimer
 pending exactly that review, and this document does not change that status.
 
 ---
+
+> **Superseded by §7a.** This section records what was believed
+> before the trade-off was measured. It is preserved, not corrected.
 
 ## 7. The trade-off we did not know we were making
 

@@ -5,6 +5,15 @@ description = "A loan risk model that did the boring parts right."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # serving/ imports fastapi, pydantic and uvicorn directly. Until now they
+    # resolved only as TRANSITIVES of mlflow (uv.lock: fastapi:813,
+    # pydantic:2989, starlette:3972, uvicorn:4183) -- installed, importable,
+    # and undeclared. That is the same "declare what you import" defect commit
+    # 341418f closed for the rest of this list: the day someone trims the ML
+    # dependency, serving/ breaks at import time in production rather than in
+    # CI. starlette is NOT declared here, because nothing in this repo imports
+    # it; it is fastapi's own dependency and fastapi is responsible for it.
+    "fastapi>=0.138.2",
     "joblib>=1.5.3",
     "lightgbm>=4.6.0",
     "matplotlib>=3.11.0",
@@ -13,10 +22,12 @@ dependencies = [
     "numpy>=2.4.6",
     "pandas>=2.3.3",
     "pandera>=0.32.1",
+    "pydantic>=2.13.4",
     "scikit-learn>=1.9.0",
     "scipy>=1.17.1",
     "seaborn>=0.13.2",
     "shap>=0.49.1",
+    "uvicorn>=0.49.0",
 ]
 
 [tool.pytest.ini_options]

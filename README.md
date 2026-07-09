@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-104%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -44,7 +44,7 @@ trust beats a 0.99 you can't.**
 | **4. Baseline-first modeling** | Logistic-regression baseline before LightGBM; no premature complexity |
 | **5. Calibration + cost-based thresholds** | Isotonic calibration on a disjoint calibration slice; operating threshold chosen by expected profit, not 0.5 |
 | **6. Explainability + fairness** | SHAP explanations (in `notebooks/analysis.ipynb` only — not part of the `src/` modeling layer or the pipeline); a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers 0.74 → 0.99 for an AUC cost of just 0.0036 |
-| **7. Drift monitoring** | A runnable yearly drift check (`pipelines/drift_check.py`): hand-rolled PSI + KS on `dti_n` per issue year against the training-years distribution, a separate 999-sentinel rate, a (100, 1000] tripwire share, and a per-year calibration gap scored with the shipped model. Validated against the dataset's own 2016+ DTI regime shift — the tripwire and calibration-gap alarms fire on 2016+ and stay quiet on 2015. A demonstrated capability on this dataset, not a live production monitoring service |
+| **7. Drift monitoring** | A runnable yearly drift check (`pipelines/drift_check.py`): hand-rolled PSI + KS on `dti_n` per issue year against the training-years distribution, a separate 999-sentinel rate, a (100, 1000] tripwire share, and a per-year calibration gap scored with the shipped model. Validated against the dataset's own 2016+ DTI regime shift — the tripwire fires across all of 2016–2018, while the calibration-gap alarm fires on 2016–2017 (2018's gap flips slightly positive, +0.0154, staying under the alarm line); both are quiet on the 2015 baseline. A demonstrated capability on this dataset, not a live production monitoring service |
 
 ---
 
@@ -118,7 +118,7 @@ credit system.
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | Prototype reason codes / feature explanations — **notebook-only** (`notebooks/analysis.ipynb`); not imported by the `src/` modeling layer or the pipeline |
-| **pytest** | 104 tests across the modeling layer |
+| **pytest** | 116 tests across the modeling layer |
 
 ---
 
@@ -126,7 +126,7 @@ credit system.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (104 passing)
+uv run pytest                                        # run the test suite (116 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
@@ -158,5 +158,5 @@ src/           Modeling layer: data loading, validation, features, leakage check
                training, calibration, evaluation, fairness
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (104 passing)
+tests/         pytest suite (116 passing)
 ```

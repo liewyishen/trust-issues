@@ -44,6 +44,10 @@ section in isolation.
   (**0.0505%** to **0.1041%** of Brier). That makes smooth calibration a free
   option, not a reason to swap: the argument for swapping, if there is one, is
   differentiability, which Brier neither supports nor opposes. (§7a)
+- **But a swap is not a drop-in.** At the same threshold `0.25`, Platt and beta
+  reject **2.5–3.1 more percentage points** of Test than isotonic does — they
+  disagree about where the boundary falls. `best_threshold` would have to be
+  re-selected. (§7a)
 - **Nothing about the calibrator is decided.** §8's open questions are open.
   Whether the shipped calibrator should be replaced, and whether serving needs
   numeric contributions at all or rank-ordered codes suffice, are recorded as
@@ -608,6 +612,62 @@ The argument was right. It is now a measurement, and Section 4's X-measure
 figures (99.53% flat in-domain, 99.31% flat over the reject region) are
 confirmed to translate into applicant mass: **99.91% of scored applicants sit
 on a flat block**, where `dp_cal/dp_raw` is exactly zero.
+
+### The effect on Brier is small. The effect on the approval rate is not.
+
+The subsection above is about Brier, and it is easy to read it as saying the
+swap is inconsequential. It is not. The two effects differ by roughly two
+orders of magnitude, and only one of them was stated.
+
+*Recomputed for this subsection rather than restated from the table above: a
+throwaway script outside the repository, `betacal==1.1.0` in a scratch
+`--target` directory, the shipped booster, `seed=42` splits. Refitting isotonic
+on `splits["calib"]` reproduces `models/isotonic_calibrator.pkl` bitwise (104
+knots, `np.array_equal` on both threshold arrays), so this is the same harness.*
+
+At the **same** threshold `0.25`, on the same 462,174 Test rows:
+
+| Calibrator | rejected rows | rejected share | swing vs isotonic | additional rejections |
+| --- | --- | --- | --- | --- |
+| isotonic | 101,601 | 21.9833% | — | — |
+| Platt | 112,977 | 24.4447% | **+2.4614 pts** | **+11,376** |
+| beta | 115,707 | 25.0354% | **+3.0521 pts** | **+14,106** |
+
+Brier moves by roughly **0.05% to 0.10% relative**. The rejected share moves by
+**2.46 points** (Platt) and **3.05 points** (beta). Note that subtracting the
+rounded shares in the table above (`25.04 − 21.98`) gives `3.06` for beta; the
+unrounded difference is `3.0521`, i.e. `3.05`. The one-hundredth is
+double-rounding, not a discrepancy in the underlying numbers.
+
+The mechanism is not subtle. The three calibrators are different monotone maps,
+so they disagree about **which raw score lands on `p_cal = 0.25`** — the
+`p_raw*` column of the previous table says so directly: `0.228948` for isotonic,
+`0.220823` for Platt, `0.218886` for beta. Holding the threshold fixed at `0.25`
+therefore does **not** hold the lending policy fixed. It holds a number fixed
+while moving the boundary that number denotes. (The ULP-neighbour threshold the
+pipeline actually selected, `0.25000000000000006`, gives identical counts for
+all three: no Test row's `p_cal` falls in that gap.)
+
+**This makes the swap more consequential than the "free option" framing above
+suggests, not less.** The option is free in Brier. It is not free in policy. A
+replacement calibrator is not a drop-in:
+
+- `best_threshold` would have to be **re-selected on Val** under the cost
+  objective (`select_threshold()`, `src/evaluate.py:261-315`), because the
+  threshold that maximised expected profit under isotonic's mapping is not the
+  one that maximises it under Platt's.
+- `test_profit`, `approval_rate`, and the naive-threshold comparison move with
+  it (`evaluate_at_threshold()`), as does the fairness audit, which is run at
+  `audit_threshold=best_threshold` (`pipelines/training_flow.py:333-336`).
+- Every number in `docs/data-decisions.md` that cites those quantities is
+  downstream of the choice.
+
+None of that is an argument against swapping. It is the bill, and §8's "Should
+the shipped calibrator be replaced?" remains open with this attached to it. What
+it does rule out is the reading that a calibrator with an indistinguishable
+Brier score is an indistinguishable calibrator. Two calibrators can agree to
+five decimal places on average probability error and still reject eleven
+thousand different people.
 
 ---
 

@@ -670,3 +670,108 @@ that reproduces the mutation.
 
 Not fixed in the notebook. Flagged so the next person to touch that cell knows
 what they are standing on.
+
+---
+
+## 10. The explainer is a wrapper
+
+Recorded, not decided. Nothing in this repo changes because of this section
+except the guard armed in `fix(explain): the additivity guard was inert -- arm it`.
+
+### TreeExplainer's fast path for LightGBM is one `predict` call
+
+For a LightGBM booster constructed with no background data,
+`shap.TreeExplainer(booster).shap_values(X, tree_limit=L)` computes nothing of
+its own. `feature_perturbation="auto"` resolves to `"tree_path_dependent"`
+(`_tree.py:248`), which selects the fast path (`_tree.py:551-555`), whose entire
+body for this model type is:
+
+```python
+phi = self.model.original_model.predict(X, num_iteration=tree_limit, pred_contrib=True)   # :580
+...
+self.expected_value = phi[0, -1]    # :615
+out = phi[:, :-1]                   # :616
+return out                          # :622
+```
+
+The contributions are LightGBM's. The `expected_value` attribute is a cached
+copy of a column shap already held.
+
+**Bit-identical, measured:** 200 real Test rows x 8 features, `tree_limit =
+best_iteration = 240`. Maximum absolute difference `0.000000e+00`; `0 / 1600`
+differing cells; `np.array_equal` is `True`. Not "agrees to tolerance" -- the
+same floats. `explainer.expected_value == phi[0, -1]` exactly, and `phi[:, -1]`
+is constant across rows (`ptp = 0.0`). Pinned by
+`test_shap_values_equals_pred_contrib_on_the_shipped_artifact`.
+
+### 65 ms of construction is discarded work on this path
+
+| Operation | min | median |
+|---|---|---|
+| `shap.TreeExplainer(booster)` | 64.91 ms | 69.19 ms |
+| `explainer.shap_values(1 row, tree_limit)` | 1.50 ms | 7.60 ms |
+| `booster.predict(1 row, pred_contrib=True)` | 1.46 ms | 2.07 ms |
+
+`TreeExplainer.__init__` parses the booster into a `TreeEnsemble`
+(`_tree.py:279`) and precomputes an `expected_value` from `model.values`
+(`_tree.py:321-325`). The fast path reads neither: it overwrites
+`expected_value` from `phi` and never touches the parsed arrays. The
+construction cost is real and its product is unused. `shap_values()` also emits
+a `UserWarning` on every call (`_tree.py:586-589`); `pred_contrib` emits none.
+
+### `check_additivity` is inert here
+
+`shap_values(..., check_additivity=True)` verifies nothing for LightGBM.
+`model_output_vals` is assigned only inside the xgboost branch
+(`_tree.py:573-576`) and stays `None` otherwise (`_tree.py:556`), so the guard
+
+```python
+if check_additivity and model_output_vals is not None:   # _tree.py:618
+```
+
+is short-circuited on every call this repo makes. Demonstrated: a frame with
+`fico_n` set to all-NaN passes `check_additivity=True` without raising.
+
+`src/explain.py` claimed in a comment that shap performed this check "for
+free". It never did. **Fixed** in commit `5705e10` -- `_assert_additivity()` now
+compares `base + contributions.sum(axis=1)` against
+`booster.predict(..., raw_score=True)` and raises past `ADDITIVITY_ATOL = 1e-9`
+(measured float64 noise: worst `7.77e-15` over 200 rows; shap's own tolerance,
+when it does run, is `atol=rtol=1e-2` at `_tree.py:845`). The guard runs on the
+serving path, costs one extra predict (0.73-1.70 ms for a single row), and
+catches a `tree_limit` mismatch -- explain 240 trees, score 10 -- which was
+previously silent.
+
+### What a migration would buy, and what it would cost
+
+Calling `booster.predict(X, num_iteration=best_iteration, pred_contrib=True)`
+directly and slicing `phi[:, :-1]` / `phi[:, -1]` would remove **both** the
+~65 ms construction and the shared-mutable-`expected_value` hazard: the base
+value would arrive inside each call's return value, so two concurrent requests
+could not cross-contaminate. Under a FastAPI service with a cached explainer,
+that hazard is a real silent-wrong-answer race -- request A's write at
+`_tree.py:615` can land between request B's call and B's read at
+`src/explain.py:219`, and no exception is raised.
+
+The price is that three LightGBM output conventions, currently absorbed by shap,
+become ours to uphold:
+
+1. **last-column-is-base** -- `phi[:, -1]` is the base value, `phi[:, :-1]` the
+   contributions.
+2. **single-output-means-2D** -- true only because `objective="binary"` and
+   `num_model_per_iteration() == 1`. A multiclass booster returns
+   `(n, n_classes * (n_features + 1))`, and the naive slice would silently mix
+   classes. shap reshapes for this at `_tree.py:590-598`.
+3. **`num_iteration=0` means all trees**, not none. Measured: `0`, `-1`, and
+   `None` all return the full 240-tree contributions. A booster that ever saved
+   `best_iteration = 0` would silently be explained in full.
+
+It would also touch public API -- `explain_applicants(..., explainer=)`,
+`global_importance(..., explainer=)`, `_get_explainer()`, and the
+one-explainer amortization in `run_explanation()` all become dead -- and the
+stub-explainer tests in `tests/test_explain.py` lose their subject. `shap`
+would become droppable from `pyproject.toml`, since `src/explain.py:67` is the
+only `import shap` in the repo.
+
+**Deliberately not done.** Recorded, not decided. The equivalence is now pinned
+by a test, so whoever takes this on is making a decision rather than a leap.

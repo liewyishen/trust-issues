@@ -399,16 +399,29 @@ Recorded, not resolved. Nothing below should be treated as decided.
   carries `best_iteration = 240` produced by early stopping in `train_lgb()`.
   Their feature sets match (8 columns, no `addr_state`). Whether the boosters
   are identical has **not** been verified -- no tree dump comparison was made.
-- **Where do the SHAP values `loan_amnt = +0.5775`, `fico_n = +0.4440`,
-  `P(default) = 0.304` come from?** They appear in scratch notes preceding this
-  investigation and were assumed to be a with-state artifact. They have **no
-  source in this repository**. `grep` across `notebooks/analysis.ipynb`,
-  `notebooks/analysis.html`, `README.md`, `docs/`, and `.ipynb_checkpoints/`
-  returns nothing; `git log -S` across both commits that touch the notebook
-  (`83fbd1f`, `3c7ae29`) returns nothing. The committed notebook's local
-  explanation is a different applicant entirely: `P(default) = 0.236`,
-  `loan_amnt = 20000` at `SHAP = +0.1606`, `fico_n = 697.0` at `SHAP = +0.0255`
-  (`notebooks/analysis.ipynb:1723-1735`). `notebooks/analysis.ipynb:1626` does
-  confirm that a with-state SHAP version once existed, but none of its output
-  survives in tracked or untracked files. **Recorded here as unsourced. Do not
-  propagate them.**
+- **What was the with-state SHAP run, and where did its output go?**
+  `notebooks/analysis.ipynb:1626` confirms that a with-state SHAP version once
+  existed -- it displayed `addr_state=TX` as a mitigating factor, which is why
+  it was replaced. **None of its output survives**, in any tracked or untracked
+  file in this repository.
+
+  Scratch notes preceding this investigation cite three specific values
+  attributed to that run: a `loan_amnt` SHAP contribution, a `fico_n` SHAP
+  contribution, and a rejected applicant's `P(default)`. **Those digits are
+  deliberately not reproduced here.** They have no provenance. Writing them
+  into a tracked file would make them discoverable by `grep`, where a future
+  reader could mistake presence-in-repo for provenance -- which is exactly how
+  an unsourced number becomes a cited one. The finding is that they have no
+  source; restating them would undercut the finding.
+
+  The negative search, recorded so it need not be repeated: `grep` across
+  `notebooks/analysis.ipynb`, `notebooks/analysis.html`, `README.md`, `docs/`,
+  and `.ipynb_checkpoints/` returns nothing; `git log -S` across both commits
+  that touch the notebook (`83fbd1f`, `3c7ae29`) returns nothing.
+
+  What the committed notebook *does* contain is sourced, and describes a
+  different applicant entirely: `P(default) = 0.236`, `loan_amnt = 20000` at
+  `SHAP = +0.1606`, `fico_n = 697.0` at `SHAP = +0.0255`
+  (`notebooks/analysis.ipynb:1723-1735`). Any explanation-related number
+  quoted from this project should trace to that cell, or to a fresh run --
+  never to the scratch notes.

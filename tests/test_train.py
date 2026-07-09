@@ -22,8 +22,8 @@ import joblib
 import mlflow
 
 import src.train as train_module
-from src.features import add_features, CATEGORICAL, FEATURES
-from src.train import train_and_save, train_lgb, load_model_artifact
+from src.features import add_features, CATEGORICAL, FEATURES, TARGET
+from src.train import train_and_save, train_lgb, load_model_artifact, _x, _xy
 
 
 def _make_split(n, purposes, homes, states, emp_lengths, rng):
@@ -220,3 +220,41 @@ def test_load_model_artifact_rejects_categorical_mismatch(tmp_path):
     path = _dump_artifact(tmp_path, features=FEATURES, categorical=CATEGORICAL + ["addr_state"])
     with pytest.raises(ValueError, match="contract mismatch"):
         load_model_artifact(path)
+
+
+# ---------------------------------------------------------------------------
+# 7. _x encodes a LABEL-FREE frame. _xy cannot: it indexes engineered[TARGET],
+# so it raises KeyError on any frame without a `Default` column -- which is
+# every live serving request. _x is the same feature-engineering path with the
+# target extraction removed, so src/explain.py can share ONE encoding path with
+# training instead of writing a second one.
+# ---------------------------------------------------------------------------
+def test_x_encodes_a_frame_with_no_target_column(synthetic_splits):
+    """The whole point of _x: no `Default` column, no raise, FEATURES out."""
+    unlabeled = synthetic_splits["test"].drop(columns=[TARGET])
+    assert TARGET not in unlabeled.columns
+
+    X = _x(unlabeled)                       # must not raise
+
+    assert list(X.columns) == FEATURES
+    assert len(X) == len(unlabeled)
+    assert TARGET not in X.columns
+
+
+def test_xy_still_requires_the_target(synthetic_splits):
+    """The other side of the guard: _xy is unchanged and still raises on the
+    same frame. If _xy ever stops needing the target, _x has no reason to
+    exist and this test says so."""
+    unlabeled = synthetic_splits["test"].drop(columns=[TARGET])
+    with pytest.raises(KeyError):
+        _xy(unlabeled)
+
+
+def test_x_matches_xy_s_features_on_a_labeled_frame(synthetic_splits):
+    """_x is not a SECOND encoding path -- on a frame both accept, they produce
+    the identical X. This is the assertion that would fail if the two ever
+    drifted apart."""
+    labeled = synthetic_splits["test"]
+    X_only = _x(labeled)
+    X_from_xy, _y = _xy(labeled)
+    pd.testing.assert_frame_equal(X_only, X_from_xy)

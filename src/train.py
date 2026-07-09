@@ -109,6 +109,26 @@ def _xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     return engineered[FEATURES], engineered[TARGET]
 
 
+def _x(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Apply feature engineering and return X alone -- no target required.
+
+    _xy() indexes engineered[TARGET], so it raises KeyError on any frame
+    without a `Default` column. Every split-frame has one; a live serving
+    request does not. This is the same feature-engineering path with the
+    target extraction removed, so a caller that has no label (src/explain.py)
+    encodes through THIS function rather than writing its own
+    add_features(df)[FEATURES] -- a second, independently-written encoding
+    path is exactly the train/serve skew calibrate.py's module docstring
+    warns about.
+
+    Pair with _to_lgb_frame() to get a frame the model can score: this
+    function derives and selects columns, that one casts categoricals to the
+    train-derived category maps.
+    """
+    return add_features(df)[FEATURES]
+
+
 def _train_categories(X_train: pd.DataFrame) -> dict[str, pd.Index]:
     """
     Derive each categorical column's category set from TRAIN ONLY.

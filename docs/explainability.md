@@ -377,22 +377,214 @@ noticing that the selection foreclosed probability-scale attribution.
 
 ---
 
+## 7a. The trade-off was priced. It does not exist.
+
+Section 7 above is left exactly as written. It records what was believed before
+anything was measured, and its central assumption was wrong -- not about the
+magnitude, about the **sign**.
+
+Section 7 assumed smooth calibration would buy differentiability and rank
+preservation *at some unknown Brier cost*, and asked whether that cost was
+`0.0001` or `0.005`. It is neither. On this model and these splits, Platt
+scaling and beta calibration are **better** calibrated than isotonic, not
+worse. There is no cost to pay.
+
+*Provenance for this entire section: two throwaway scripts run outside the
+repository (`price_calibrators.py`, `refit_variance.py`), reading `src/` but
+changing nothing. `IsotonicRegression(out_of_bounds="clip")` per
+`src/calibrate.py:179`; Platt is `LogisticRegression(penalty=None)` on
+`logit(p_raw)`, which recovers the model's raw log-odds margin exactly since
+`p_raw = sigmoid(margin)`; beta calibration is `betacal==1.1.0` (Kull et al.'s
+reference implementation), installed into a scratch `--target` directory --
+neither `.venv` nor `uv.lock` nor `pyproject.toml` was modified, and `betacal`
+is not importable from the project environment. Nothing was hand-rolled.*
+
+**Sanity check on the harness.** Refitting isotonic on `splits["calib"]`
+reproduces the shipped `models/isotonic_calibrator.pkl` **bitwise**:
+`np.array_equal` on both `X_thresholds_` and `y_thresholds_` returns `True`,
+104 knots each. The splits and the model reproduce, so the three calibrators
+are genuinely fit on the same 40,000 calib rows and scored on the same rows.
+
+### Design bound -- what this study does and does not vary
+
+The LightGBM booster is trained on **2007-2014** and is **fixed** across every
+seed. Re-shuffling 2015 and re-cutting Val/Calib (mirroring
+`src/data_loader.py:152-157`) changes only *which 40,000 rows the calibrator is
+fit on*. `splits["test"]` (2016-2017, n=462,174) and `splits["holdout_2018"]`
+(n=56,160) are **identical across all seeds**; raw scores were predicted once
+per split and reused.
+
+This therefore measures **calibration-slice variance only**. It does not vary
+the model fit, the train/test boundary, the year definitions, or the feature
+set. A regime-shift stress test beyond 2018 is a different question, not
+answered here.
+
+### Refit variance: 10 seeds x 2 splits
+
+**TEST (2016-2017), n=462,174, actual default rate 0.232252**
+
+| Calibrator | mean Brier | sd | min | max | mean AUC | distinct outputs |
+| --- | --- | --- | --- | --- | --- | --- |
+| isotonic | 0.169278 | 1.85e-04 | 0.168985 | 0.169534 | 0.665458 | **463** |
+| Platt | 0.169192 | 1.80e-04 | 0.168890 | 0.169458 | 0.665982 | 455,099 |
+| beta | **0.169174** | 1.86e-04 | 0.168869 | 0.169433 | 0.665982 | 455,099 |
+
+| Paired delta (TEST) | mean | sd | min | max | t (df=9) |
+| --- | --- | --- | --- | --- | --- |
+| Platt − isotonic | −8.551e-05 | 3.39e-05 | −1.390e-04 | **−3.508e-05** | −7.98 |
+| beta − isotonic | −1.035e-04 | 3.35e-05 | −1.660e-04 | **−5.649e-05** | −9.77 |
+
+**HOLDOUT_2018, n=56,160, actual default rate 0.1575** -- a genuinely different
+regime; this year is excluded from Test for suspected right-censoring
+(`src/data_loader.py:129-132`).
+
+| Calibrator | mean Brier | sd | min | max | mean AUC |
+| --- | --- | --- | --- | --- | --- |
+| isotonic | 0.126332 | 7.66e-05 | 0.126233 | 0.126472 | 0.673203 |
+| Platt | 0.126214 | 8.17e-05 | 0.126102 | 0.126337 | 0.673817 |
+| beta | **0.126200** | 7.91e-05 | 0.126084 | 0.126315 | 0.673817 |
+
+| Paired delta (HOLDOUT_2018) | mean | sd | min | max | t (df=9) |
+| --- | --- | --- | --- | --- | --- |
+| Platt − isotonic | −1.176e-04 | 3.18e-05 | −1.533e-04 | **−7.086e-05** | −11.69 |
+| beta − isotonic | −1.315e-04 | 3.12e-05 | −1.713e-04 | **−9.273e-05** | −13.33 |
+
+The `max` column is the finding: **it never reaches zero.** Even the worst seed
+for Platt beats isotonic by 3.5e-05 on Test.
+
+### Sign flips: 0 out of 40
+
+Across 2 calibrators x 2 splits x 10 seeds, the sign never flips.
+
+| Split | Platt worse than isotonic | beta worse than isotonic |
+| --- | --- | --- |
+| TEST | **0/10** | **0/10** |
+| HOLDOUT_2018 | **0/10** | **0/10** |
+
+Isotonic is last on Brier in 10/10 seeds on both splits. The only ordering that
+moves is *between* the two smooth calibrators: 9/10 seeds give
+`beta < platt < isotonic`; seed 2 gives `platt < beta < isotonic`.
+
+### Why the comparison must be paired
+
+This is the statistical crux and it is easy to get wrong. The across-seed sd of
+isotonic's own Brier on Test is **1.85e-04** -- *larger* than the mean delta of
+**8.55e-05**. Comparing marginal means without pairing would read as noise and
+the finding would be dismissed.
+
+It is not noise. Within each seed, all three calibrators are fit on the
+identical calib slice and scored on the identical test rows, so the comparison
+is paired, and the paired sd is **3.39e-05**. The seed-to-seed wobble is a
+*common mode* that moves all three calibrators together; it cancels in the
+difference. That is why the levels are loose and the deltas are tight.
+
+### Distinct output values
+
+On Test, isotonic produces **463** distinct probabilities from 462,174 rows:
+its 52 block values plus the handful of rows landing on ramps. Platt and beta
+each produce **455,099** -- exactly the number of distinct `p_raw` values in
+Test. Both are strictly increasing bijections, so they preserve every raw score
+as a distinct probability. Nothing is tied that was not already tied.
+
+### Minimum slope over the reject region (`p_cal >= 0.25`)
+
+| Calibrator | `p_raw*` | min `dp_cal/dp_raw` | rejected share of Test |
+| --- | --- | --- | --- |
+| isotonic | 0.228948 | **0** (exactly) | 21.98% |
+| Platt | 0.220823 | 0.960376 | 24.44% |
+| beta | 0.218886 | 0.793324 | 25.04% |
+
+Isotonic's is exactly zero, computed from the knot segments rather than a grid
+(the ramps are ~4e-06 wide and a grid would alias them). Platt's numeric slope
+was cross-checked against the closed form `w * p_cal(1-p_cal) / (p(1-p))` and
+agrees to six decimals at `0.960376`. Fitted parameters: Platt
+`w=1.054148, c=0.230536`; beta `a=1.163201, b=0.605803, m=0.463044`.
+
+This is what Section 5 said was impossible under isotonic and is simply
+available under either smooth calibrator.
+
+### The effect size is small, and is not on its own a reason to swap
+
+Stated plainly, because the direction of the result invites overreach. The mean
+paired delta is **0.051% of Brier** (Platt on Test) to **0.104%** (beta on
+HOLDOUT_2018):
+
+| Split | Platt | beta |
+| --- | --- | --- |
+| TEST | 0.0505% | 0.0612% |
+| HOLDOUT_2018 | 0.0931% | 0.1041% |
+
+An improvement of five hundredths of one percent in Brier is not a reason to
+change a shipped artifact. **The reason to swap, if there is one, is
+differentiability and rank preservation** -- the properties Sections 4 and 5
+established that isotonic cannot provide at all. Brier establishes only that
+acquiring those properties **costs nothing**. It converts the question from a
+trade-off into a free option. It does not, by itself, argue for exercising it.
+
+### The 2018 widening
+
+The advantage is *larger* on the shifted-regime holdout than on Test: Platt
+improves by −8.551e-05 on Test versus **−1.176e-04** on HOLDOUT_2018, with a
+tighter t-statistic (−7.98 vs −11.69). Beta likewise (−1.035e-04 vs
+−1.315e-04).
+
+One reading is that isotonic's 52-level step function partly memorizes the 2015
+calib slice's local noise, and that a lookup table transfers worse than a two-
+or three-parameter monotone curve when the population's default rate moves from
+0.2323 to 0.1575. **That is a pattern consistent with the numbers, not an
+isolated mechanism.** Nothing in this study controls for the alternative
+explanations, and no experiment here was designed to separate them. It is
+recorded because the direction is informative, not because it is established.
+
+### Closing the Section 4 open question: ramp occupancy is measured
+
+Section 4 argued from bounded density that the share of applicants landing on
+one of the 51 ramps must be negligible, and explicitly labelled that an
+argument rather than a measurement. It has now been measured, on
+`splits["test"]` with the shipped calibrator:
+
+| Quantity | Count | Share |
+| --- | --- | --- |
+| Test rows | 462,174 | -- |
+| Landing on a flat block | 461,758 | 99.9100% |
+| **Landing on a ramp** | **416** | **0.0900%** |
+| Rejected rows (`p_cal >= 0.25`) | 101,601 | 21.98% |
+| **Rejected and on a ramp** | **198** | **0.195% of rejected** |
+
+The argument was right. It is now a measurement, and Section 4's X-measure
+figures (99.53% flat in-domain, 99.31% flat over the reject region) are
+confirmed to translate into applicant mass: **99.91% of scored applicants sit
+on a flat block**, where `dp_cal/dp_raw` is exactly zero.
+
+---
+
 ## 8. Open questions
 
 Recorded, not resolved. Nothing below should be treated as decided.
 
-- **What is Platt scaling's Brier score on our calib/test split?** Beta
-  calibration's? Unmeasured.
-- **Is the Brier difference worth the loss of attribution?** Cannot be
-  answered until the previous question is.
+- ~~**What is Platt scaling's Brier score on our calib/test split?** Beta
+  calibration's? Unmeasured.~~ **ANSWERED, see Section 7a.** Both are *lower*
+  than isotonic's, on Test and on HOLDOUT_2018, across 10 calibration-slice
+  refits, with 0/40 sign flips.
+- ~~**Is the Brier difference worth the loss of attribution?**~~ **DISSOLVED,
+  see Section 7a.** There is no loss to weigh: the smooth calibrators are
+  better on Brier, not worse. The question was posed as a trade-off and the
+  trade-off does not exist. What remains is not "is it worth it" but "should a
+  shipped artifact be changed at all" -- a different question, recorded below.
 - **Does serving actually need numeric contributions, or do rank-ordered
   reason codes suffice?** This is a requirements question, not a modeling
-  question, and it may make the previous two moot.
-- **What fraction of applicants actually land on a ramp?** Section 4's
-  bounded-density argument is an argument, not a measurement. It is
-  measurable: load the test split, compute `p_raw`, count how many fall in
-  the 51 ramp intervals. Not done here (Step 1 was read-only, no splits
-  loaded).
+  question, and it may make everything above moot. Still open.
+- ~~**What fraction of applicants actually land on a ramp?**~~ **ANSWERED, see
+  Section 7a.** 416 of 462,174 Test rows (0.0900%); 198 of 101,601 rejected
+  rows (0.195%). Section 4's bounded-density argument was correct, and is now
+  a measurement rather than an argument.
+- **Should the shipped calibrator be replaced?** Not decided here, and
+  deliberately not argued either way in this document. Replacing it would
+  re-open `best_threshold`, `test_profit`, `approval_rate`, every number in
+  `docs/data-decisions.md` that cites them, and an unknown number of tests.
+  Section 7a establishes only that the swap would cost nothing on Brier --
+  which is a fact about calibration quality, not a decision about a shipped
+  artifact.
 - **Are `model_ns` and the shipped booster the same model?**
   `notebooks/analysis.ipynb:1565` retrains `model_ns` with a fixed
   `num_boost_round=best_rounds` and no early stopping; `models/lgbm_model.pkl`

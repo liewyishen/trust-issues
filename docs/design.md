@@ -3,8 +3,10 @@
 ## 1. What the system does
 
 This repository trains a credit-default model on the LendingClub granting-model
-dataset (2007–2018), scoring an applicant's default probability from eight
-application-time features. It takes the target from the data's own label, splits by
+dataset (2007–2018), scoring an applicant's default probability from **seven raw
+application-time fields**, which feature engineering turns into **eight model
+features** — `emp_length` yields both an ordinal and an explicit not-disclosed flag
+(`src/features.py`). It takes the target from the data's own label, splits by
 origination year, audits for leakage and fairness, and calibrates so the score can be
 priced. Test ROC-AUC is about 0.67 — the ceiling without credit-bureau history — and
 that is the result, not a problem to optimize away.
@@ -97,7 +99,7 @@ Constraints a serving design must answer, not defects to apologize for.
 
 A referral band on the calibrated probability — "review everyone between 0.20 and 0.30"
 — **is not currently expressible.** The composed scoring function takes only 21 distinct
-values anywhere in the reject region ([`explainability.md`](explainability.md) §5b): a
+values anywhere in the reject region ([`explainability.md`](explainability.md) §4): a
 band does not select a population, it selects a step.
 
 One rule *is* well-defined today. An applicant can be rejected with every SHAP
@@ -105,3 +107,6 @@ contribution ≤ 0, when the base value alone clears the boundary; `reason_codes
 `[]`. That applicant cannot be issued an adverse-action notice listing principal
 reasons, because there are none, and must route to review regardless of `p_cal`. That
 is a structural property of the model, not an error state.
+
+> Rendered to A4 at 10pt with the diagram at 45% width: 2 pages (headless Chromium,
+> `/Type /Page` count). At 11pt with the diagram inline it is 3.

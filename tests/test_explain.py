@@ -42,8 +42,8 @@ import joblib
 from scipy.special import expit
 
 from src.features import CATEGORICAL, FEATURES, TARGET
-from src.train import _to_lgb_frame, _x, train_lgb
-from src.calibrate import calibrate_model
+from src.train import _to_lgb_frame, _x, load_model_artifact, train_lgb
+from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
 from src.explain import (
     ADDITIVITY_ATOL,
     CONTRIBUTION_SCALE,
@@ -648,3 +648,76 @@ def test_unseen_category_keeps_its_human_readable_value(
     codes = {rc["feature"]: rc["value"] for rc in out["reason_codes"]}
     assert codes["purpose"] == "a_purpose_never_seen_in_training"
     assert "nan" not in [rc["value"] for rc in out["reason_codes"]]
+
+
+# ---------------------------------------------------------------------------
+# 15. TreeExplainer is a WRAPPER over booster.predict(pred_contrib=True), on
+#     the SHIPPED artifact.
+#
+#     For a LightGBM booster with no background data, shap's fast path
+#     (_tree.py:551-555) computes nothing itself: it forwards to
+#     `original_model.predict(X, num_iteration=tree_limit, pred_contrib=True)`
+#     (_tree.py:580), keeps the last column as expected_value (_tree.py:615),
+#     and returns the rest (_tree.py:616). The 65 ms TreeExplainer construction
+#     parses the booster into arrays this path never reads.
+#
+#     Nothing in this repo pinned that. It is the load-bearing premise of any
+#     future migration away from shap on the hot path -- which would delete the
+#     construction cost AND the shared-mutable-expected_value hazard, at the
+#     price of owning three LightGBM output conventions (docs/explainability.md
+#     Section 10). Without this test that migration is a leap. With it, it is a
+#     decision.
+#
+#     Skipped, not failed, when the shipped artifact is absent: models/ is
+#     gitignored, so a fresh clone has nothing to compare against.
+# ---------------------------------------------------------------------------
+def test_shap_values_equals_pred_contrib_on_the_shipped_artifact(applicants):
+    shap = pytest.importorskip("shap")
+
+    if not DEFAULT_MODEL_PATH.exists():
+        pytest.skip(f"shipped artifact absent: {DEFAULT_MODEL_PATH} (models/ is gitignored)")
+
+    artifact = load_model_artifact(DEFAULT_MODEL_PATH)   # also asserts the feature contract
+    booster = artifact["model"]
+    tree_limit = artifact["best_iteration"]
+
+    # A handful of rows, deliberately including an unseen category (-> NaN) and
+    # a null emp_length, so the comparison covers the degraded encodings a
+    # serving request can actually produce -- not just clean rows.
+    rows = applicants.head(6).copy()
+    rows.loc[rows.index[0], "purpose"] = "a_purpose_never_seen_in_training"
+    rows.loc[rows.index[1], "emp_length"] = None
+    X_lgb = _to_lgb_frame(_x(rows), artifact["category_maps"])
+
+    # The 2D-single-output assumption the last-column-is-base slice depends on.
+    assert booster.num_model_per_iteration() == 1
+
+    explainer = shap.TreeExplainer(booster)
+    pre_call = np.asarray(explainer.expected_value).copy()   # length-1 ndarray
+    sv = np.asarray(explainer.shap_values(X_lgb, tree_limit=tree_limit))
+    post_call = explainer.expected_value                     # mutated to a scalar
+
+    phi = np.asarray(booster.predict(X_lgb, num_iteration=tree_limit, pred_contrib=True))
+    assert phi.shape == (len(rows), len(FEATURES) + 1)
+
+    # The contributions are the same objects, not merely close.
+    assert np.array_equal(phi[:, :-1], sv)
+
+    # expected_value is literally phi[0, -1] -- _tree.py:615 assigns it there.
+    assert float(post_call) == float(phi[0, -1])
+
+    # The mutation is a TYPE change, not a value change: a length-1 ndarray
+    # becomes a numpy scalar. That is why reading expected_value[1] before the
+    # call raises IndexError while reading it after does not -- the hazard
+    # _shap_matrix's read-after-the-call ordering exists for. The value happens
+    # to be identical here because tree_limit covers every tree.
+    assert pre_call.shape == (1,)
+    assert np.isscalar(post_call) or np.asarray(post_call).ndim == 0
+
+    # The base column is constant across rows: it is the model's base, not a
+    # per-row quantity. This is what makes `phi[0, -1]` a safe scalar to take.
+    assert np.ptp(phi[:, -1]) == 0.0
+
+    # And the identity that matters downstream still closes on the raw margin.
+    margin = booster.predict(X_lgb, num_iteration=tree_limit, raw_score=True)
+    assert np.abs(phi.sum(axis=1) - margin).max() < ADDITIVITY_ATOL

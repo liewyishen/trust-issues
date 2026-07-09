@@ -21,7 +21,7 @@ in-band nor the known sentinel. The investigation concluded these are a real
 2016+ high-DTI borrower population, not corrupt data, which is why dti_n's
 real-value ceiling below is 1000, not 100. This is a live train/serve
 distribution-shift signal (Train, 2007-2014, has none of these rows; Test and
-the 2018 holdout do) -- future drift monitoring should track dti_n's
+the 2018 holdout do) -- so pipelines/drift_check.py now monitors dti_n's
 year-over-year distribution, not just its marginal range. See the dti_n
 Check in LOAN_SCHEMA below for the full evidence trail.
 
@@ -77,8 +77,8 @@ DTI_SENTINEL = 999.0
 # computation/reporting methodology around 2015-2016, not with corruption.
 # That means the model NEVER sees this DTI regime in Train, only in Test and
 # the 2018 holdout: a genuine train/serve distribution shift, not just a
-# data-hygiene footnote. TODO(drift): once pipelines/drift_check.py exists,
-# it must monitor dti_n's distribution by issue_year, not just its range.
+# data-hygiene footnote -- now watched by pipelines/drift_check.py, which
+# monitors dti_n's distribution by issue_year, not just its range.
 #
 # DTI_MAX_REAL is therefore widened to 1000: wide enough to admit the
 # observed real ceiling (991.57) with a small margin, narrow enough that a

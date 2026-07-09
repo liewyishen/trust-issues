@@ -1,8 +1,9 @@
 """
 Input-distribution drift monitor for the LendingClub credit-default model.
 
-This module repays the live TODO in src/data_validation.py ("TODO(drift)")
-and docs/data-decisions.md. The 495-row DTI investigation established that
+This module discharges the drift TODO that src/data_validation.py and
+docs/data-decisions.md used to carry ("TODO(drift)"). The 495-row DTI
+investigation established that
 2016+ loans carry a dti_n reporting regime (real values in (100, 1000]) the
 training years never saw: 0 such rows in Train (2007-2014), 7 in 2015, 488
 in 2016-2018. The calibrated-probability gap on Test (mean_pred 0.1915 vs.

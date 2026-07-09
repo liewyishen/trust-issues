@@ -32,6 +32,19 @@ The headline number is a test AUC around **0.67** — and that's the point, not 
 eight application-time features and no credit-bureau history, that is the ceiling. **A 0.67 you can
 trust beats a 0.99 you can't.**
 
+![Architecture](docs/architecture.png)
+
+*[Interactive version](docs/architecture.html) — every label states the file:line it was verified
+at; the page's Export-as-PNG button regenerates the image above.*
+
+Colour carries meaning and nothing else: red is a gate that raises and halts the run, blue is
+reporting that can halt nothing, grey dashed is code not wired into the flow. Two modules sit
+outside the pipeline and are drawn that way rather than drawn as connected:
+`pipelines/drift_check.py` is a separate manual entry point, and `src/explain.py` has no caller
+except its tests. No calibrator edge runs to the fairness step — `run_fairness_audit()` never loads
+the shipped calibrator, it refits its own isotonic (`src/fairness.py:586-587`) — so drawing that
+edge would be a lie.
+
 ---
 
 ## What this project does right

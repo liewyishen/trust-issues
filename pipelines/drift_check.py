@@ -34,7 +34,7 @@ Five signals, each traceable to a specific finding:
                            (never refit). Negative = under-predicted risk.
 
 Design decisions (agreed before implementation):
-  - Hand-rolled PSI/KS, no Evidently: four scalar signals do not justify
+  - Hand-rolled PSI/KS, no Evidently: four scalar distribution signals do not justify
     pulling litestar/uvicorn/watchdog/nltk + usage telemetry into a batch
     job, and hand-rolled matches this repo's hand-rolled fairness audit.
   - Plain module + callable entry, no Metaflow FlowSpec: the check is one

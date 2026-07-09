@@ -113,7 +113,7 @@ credit system.
 | **Python 3.11 + uv** | Runtime and reproducible dependency / virtualenv management |
 | **LightGBM** | The production model — gradient-boosted trees on application-time features |
 | **scikit-learn** | Logistic-regression baseline, preprocessing, and the isotonic calibrator |
-| **SciPy** | Two-sample KS statistic in the drift monitor — declared as a direct dependency the moment code imported it directly. Evidently was deliberately not adopted: its web-server + telemetry dependency footprint isn't worth four scalar signals, and hand-rolled PSI matches the repo's hand-rolled audits |
+| **SciPy** | Two-sample KS statistic in the drift monitor — declared as a direct dependency the moment code imported it directly. Evidently was deliberately not adopted: its web-server + telemetry dependency footprint isn't worth four scalar distribution signals, and hand-rolled PSI matches the repo's hand-rolled audits |
 | **Pandera** | Schema gate that *fails* the pipeline on contract violations (it caught the 495 DTI rows) |
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |

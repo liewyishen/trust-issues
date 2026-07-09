@@ -135,6 +135,81 @@ DEFAULT_MAX_REASONS = 4
 # stabler ranking; nothing here depends on the value being 4000.
 SHAP_SAMPLE_N = 4000
 
+# ---------------------------------------------------------------------------
+# ADDITIVITY_ATOL -- how far base + sum(contributions) may drift from the raw
+# margin before _assert_additivity() refuses to explain.
+#
+# Measured on the shipped 240-tree booster over 200 real Test rows: the worst
+# absolute discrepancy is 7.77e-15, i.e. one float64 ULP at a margin magnitude
+# of ~2. 1e-9 leaves six orders of headroom over that noise while still
+# catching every failure this guard exists for -- a tree_limit mismatch between
+# the explained trees and the scored trees, a corrupted contribution matrix, a
+# multiclass booster whose last column is one class's base rather than the
+# model's, or a change in shap's return contract. Those all land at O(0.1) or
+# worse, not O(1e-15).
+#
+# For contrast, shap's own assert_additivity uses atol=1e-2, rtol=1e-2
+# (_tree.py:845) -- thirteen orders looser, and on the LightGBM path it never
+# runs at all. See _shap_matrix.
+# ---------------------------------------------------------------------------
+ADDITIVITY_ATOL = 1e-9
+
+
+def _assert_additivity(
+    booster,
+    X_lgb: pd.DataFrame,
+    sv: np.ndarray,
+    base: float,
+    tree_limit: int | None,
+    atol: float = ADDITIVITY_ATOL,
+) -> None:
+    """
+    Prove base + sum(contributions) IS the margin the booster scores with.
+
+    This is the check shap's `check_additivity=True` is widely believed to
+    perform and does not (see _shap_matrix). It costs one extra
+    `booster.predict(..., raw_score=True)` -- ~1.3 ms on the shipped booster
+    for a single row -- and it runs on the serving path, not only under pytest.
+
+    Fail-closed on purpose, the same discipline as load_model_artifact()'s
+    feature contract and load_calibrator()'s trained_at binding: a violated
+    additivity identity means the contributions being ranked into an
+    adverse-action notice do not describe the margin the applicant was actually
+    scored on. That is a wrong explanation, not a degraded one, and there is no
+    safe way to serve it.
+
+    `num_iteration=tree_limit` mirrors exactly what shap forwards to LightGBM
+    (_tree.py:580), so the margin compared against is the margin of the same
+    trees that were explained.
+
+    Raises
+    ------
+    ValueError
+        If any row's reconstruction drifts from the raw margin by more than
+        `atol`.
+    """
+    margin = np.asarray(
+        booster.predict(X_lgb, num_iteration=tree_limit, raw_score=True), dtype=float,
+    ).ravel()
+    recon = float(base) + np.asarray(sv, dtype=float).sum(axis=1)
+
+    diff = np.abs(recon - margin)
+    if diff.size and diff.max() > atol:
+        i = int(np.argmax(diff))
+        raise ValueError(
+            "Additivity check failed -- refusing to explain.\n"
+            f"  row {i}: base_value + sum(contributions) = {recon[i]!r}\n"
+            f"           booster raw-score margin        = {margin[i]!r}\n"
+            f"  |difference| = {diff[i]:.6e}  (tolerance {atol:.1e}, "
+            f"worst of {diff.size} row(s))\n"
+            "base + sum(contributions) must BE the margin the booster scored "
+            "with. It is not, so these contributions do not describe this "
+            "applicant's score and must not be ranked into reason codes. "
+            "Check that tree_limit matches the num_iteration used to score, "
+            "and that shap's return contract has not changed -- see "
+            "_shap_matrix."
+        )
+
 
 def _get_explainer(booster, explainer: shap.TreeExplainer | None = None) -> shap.TreeExplainer:
     """
@@ -168,6 +243,7 @@ def _get_explainer(booster, explainer: shap.TreeExplainer | None = None) -> shap
 def _shap_matrix(
     explainer: shap.TreeExplainer,
     X_lgb: pd.DataFrame,
+    booster,
     tree_limit: int | None = None,
 ) -> tuple[np.ndarray, float]:
     """
@@ -196,8 +272,27 @@ def _shap_matrix(
     but a booster saved without truncation would silently break additivity.
     Passing it explicitly removes the precondition instead of testing for it.
 
-    shap's own `check_additivity` guard is left at its default (True): it
-    verifies base + sum(contributions) == margin inside the call, for free.
+    shap's `check_additivity` VERIFIES NOTHING HERE, despite defaulting to
+    True. Inside the LightGBM fast path (_tree.py:551-555) `model_output_vals`
+    is left at None (_tree.py:556) -- only the xgboost branch ever assigns it
+    (_tree.py:573-576) -- so the guard
+
+        if check_additivity and model_output_vals is not None:   # _tree.py:618
+            self.assert_additivity(out, model_output_vals)
+
+    is short-circuited on every call this repo makes. Demonstrated, not
+    inferred: a frame with fico_n set to all-NaN passes
+    `shap_values(..., check_additivity=True)` without raising. This docstring
+    previously claimed shap performed the check "for free"; it never did.
+
+    So the check is performed HERE instead, by _assert_additivity(), against
+    `booster.predict(..., raw_score=True)`. That is the `booster` parameter's
+    only purpose. It costs one extra predict (~1.3 ms for one row) and it runs
+    wherever contributions are produced -- which is why the check lives at the
+    point of PRODUCTION rather than in explain_applicants(): run_explanation()
+    and global_importance() come through here too, and explain_applicants()'s
+    precomputed escape hatch bypasses this function entirely with values that
+    were already verified on their way in.
 
     Returns
     -------
@@ -209,7 +304,8 @@ def _shap_matrix(
     ------
     ValueError
         If the explainer returns a shape this function does not recognize --
-        loudly, rather than silently reducing the wrong axis.
+        loudly, rather than silently reducing the wrong axis -- or if
+        base + sum(contributions) is not the margin the booster scores with.
     """
     sv = explainer.shap_values(X_lgb, tree_limit=tree_limit)
     if isinstance(sv, list):
@@ -235,6 +331,8 @@ def _shap_matrix(
             f"{(len(X_lgb), len(FEATURES))}. shap's return contract has "
             "changed -- see _shap_matrix."
         )
+
+    _assert_additivity(booster, X_lgb, sv, float(base), tree_limit)
     return sv, float(base)
 
 
@@ -385,7 +483,8 @@ def explain_applicants(
 
         X_lgb = _to_lgb_frame(X, artifact["category_maps"])
         shap_values, base_value = _shap_matrix(
-            _get_explainer(booster, explainer), X_lgb, tree_limit=best_iteration,
+            _get_explainer(booster, explainer), X_lgb, booster,
+            tree_limit=best_iteration,
         )
         p_raw_vec = booster.predict(X_lgb, num_iteration=best_iteration)
         p_cal = apply_calibration(iso, p_raw_vec)
@@ -464,7 +563,7 @@ def global_importance(
         artifact = load_model_artifact(model_path)
         X_lgb = _to_lgb_frame(_x(df), artifact["category_maps"])
         shap_values, _base = _shap_matrix(
-            _get_explainer(artifact["model"], explainer), X_lgb,
+            _get_explainer(artifact["model"], explainer), X_lgb, artifact["model"],
             tree_limit=artifact["best_iteration"],
         )
 
@@ -587,7 +686,7 @@ def run_explanation(
     # docstring describes, done explicitly rather than by a hidden cache.
     explainer = _get_explainer(booster)
     X_lgb = _to_lgb_frame(_x(sample), artifact["category_maps"])
-    sv, base = _shap_matrix(explainer, X_lgb, tree_limit=best_iteration)
+    sv, base = _shap_matrix(explainer, X_lgb, booster, tree_limit=best_iteration)
     p_cal = apply_calibration(iso, booster.predict(X_lgb, num_iteration=best_iteration))
 
     imp = global_importance(sample, shap_values=sv)

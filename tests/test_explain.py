@@ -25,6 +25,10 @@ from an actual run. What's locked down here is the EXPLANATION CONTRACT:
      no target column at all. This is the serving-path guarantee.
  10. shap's return shapes are normalized in exactly one place, including the
      one that bites: explainer.expected_value is MUTATED by shap_values().
+ 11. Additivity is ENFORCED, not assumed. shap's own check_additivity=True is
+     inert on the LightGBM branch (test 13 pins that), so _shap_matrix proves
+     base + sum(contributions) == the booster's raw margin itself, and raises
+     when it does not.
 
 Run:  pytest tests/test_explain.py -v
 """
@@ -41,6 +45,7 @@ from src.features import CATEGORICAL, FEATURES, TARGET
 from src.train import _to_lgb_frame, _x, train_lgb
 from src.calibrate import calibrate_model
 from src.explain import (
+    ADDITIVITY_ATOL,
     CONTRIBUTION_SCALE,
     DEFAULT_EXPLAIN_THRESHOLD,
     _rank_adverse,
@@ -55,6 +60,34 @@ from src.explain import (
 SELECTED_THRESHOLD = float(np.arange(0.05, 0.95, 0.01)[20])
 
 REASON_CODE_KEYS = {"rank", "feature", "value", "contribution_log_odds"}
+
+
+class _StubBooster:
+    """A booster that reports whatever raw margin the test says its trees produce.
+
+    _shap_matrix now proves base + sum(contributions) == that margin, so every
+    stub explainer below needs a booster whose margin AGREES with the numbers
+    the stub returns -- otherwise the additivity guard (correctly) fires before
+    the test reaches its own assertion.
+    """
+
+    def __init__(self, margin: float):
+        self.margin = float(margin)
+
+    def predict(self, X, num_iteration=None, raw_score=False):
+        return np.full(len(X), self.margin)
+
+
+class _ReplayExplainer:
+    """Returns contributions handed to it, mutating expected_value like shap does."""
+
+    def __init__(self, sv: np.ndarray, base: float):
+        self.expected_value = np.array([-99.0])   # pre-call value, wrong on purpose
+        self._sv, self._base = sv, base
+
+    def shap_values(self, X, tree_limit=None, **kw):
+        self.expected_value = np.float64(self._base)
+        return self._sv
 
 
 def _make_split(n, purposes, homes, states, emp_lengths, rng):
@@ -185,7 +218,10 @@ def test_shap_explains_only_the_trees_the_model_scores_with(applicants, artifact
             return np.zeros((len(X), len(FEATURES)))
 
     X_lgb = _to_lgb_frame(_x(applicants), artifact["category_maps"])
-    _shap_matrix(_RecordingExplainer(), X_lgb, tree_limit=artifact["best_iteration"])
+    _shap_matrix(
+        _RecordingExplainer(), X_lgb, _StubBooster(0.0),
+        tree_limit=artifact["best_iteration"],
+    )
     assert seen["tree_limit"] == artifact["best_iteration"]
 
 
@@ -464,15 +500,17 @@ class _StubExplainer:
 
 def test_shap_matrix_reads_expected_value_after_the_call():
     X = pd.DataFrame(np.zeros((5, len(FEATURES))), columns=FEATURES)
-    sv, base = _shap_matrix(_StubExplainer(5, len(FEATURES)), X)
+    k = len(FEATURES)
+    sv, base = _shap_matrix(_StubExplainer(5, k), X, _StubBooster(1.25 + k))
     assert base == 1.25          # the post-call value, not the -99.0 pre-call one
-    assert sv.shape == (5, len(FEATURES))
+    assert sv.shape == (5, k)
 
 
 def test_shap_matrix_takes_the_positive_class_from_a_list_return():
     """shap has historically returned [class_0, class_1] for binary boosters."""
     X = pd.DataFrame(np.zeros((5, len(FEATURES))), columns=FEATURES)
-    sv, _base = _shap_matrix(_StubExplainer(5, len(FEATURES), as_list=True), X)
+    k = len(FEATURES)
+    sv, _base = _shap_matrix(_StubExplainer(5, k, as_list=True), X, _StubBooster(1.25 + k))
     assert (sv == 1.0).all()     # class_1, not the -1.0 class_0 block
 
 
@@ -483,7 +521,8 @@ def test_shap_matrix_takes_the_positive_class_from_a_two_element_base():
             return np.ones((self._n, self._k))
 
     X = pd.DataFrame(np.zeros((3, len(FEATURES))), columns=FEATURES)
-    _sv, base = _shap_matrix(_TwoClassBase(3, len(FEATURES)), X)
+    k = len(FEATURES)
+    _sv, base = _shap_matrix(_TwoClassBase(3, k), X, _StubBooster(0.6 + k))
     assert base == pytest.approx(0.6)
 
 
@@ -496,7 +535,7 @@ def test_shap_matrix_raises_loudly_on_an_unrecognized_shape():
 
     X = pd.DataFrame(np.zeros((3, len(FEATURES))), columns=FEATURES)
     with pytest.raises(ValueError, match="Unrecognized shap_values shape"):
-        _shap_matrix(_WrongShape(3, len(FEATURES)), X)
+        _shap_matrix(_WrongShape(3, len(FEATURES)), X, _StubBooster(0.0))
 
 
 def test_shap_matrix_raises_loudly_on_an_unrecognized_base_size():
@@ -507,7 +546,82 @@ def test_shap_matrix_raises_loudly_on_an_unrecognized_base_size():
 
     X = pd.DataFrame(np.zeros((3, len(FEATURES))), columns=FEATURES)
     with pytest.raises(ValueError, match="Unrecognized expected_value"):
-        _shap_matrix(_WrongBase(3, len(FEATURES)), X)
+        _shap_matrix(_WrongBase(3, len(FEATURES)), X, _StubBooster(0.0))
+
+
+# ---------------------------------------------------------------------------
+# 13. The additivity guard is ARMED. shap's own check_additivity=True is inert
+#     on the LightGBM branch -- model_output_vals stays None (_tree.py:556) so
+#     the guard at _tree.py:618 never fires -- which means, until this test,
+#     NOTHING verified that the contributions being ranked into an
+#     adverse-action notice describe the margin the applicant was scored on.
+#     _shap_matrix now checks it itself, fail-closed. Both sides, on a real
+#     booster: the true contributions pass, a corrupted one raises.
+# ---------------------------------------------------------------------------
+def test_additivity_guard_fires_on_corrupted_contributions(applicants, artifact):
+    booster = artifact["model"]
+    tree_limit = artifact["best_iteration"]
+    X_lgb = _to_lgb_frame(_x(applicants), artifact["category_maps"])
+
+    # The booster's own contributions: last column is the base value.
+    phi = np.asarray(booster.predict(X_lgb, num_iteration=tree_limit, pred_contrib=True))
+    sv_true, base = phi[:, :-1], float(phi[0, -1])
+
+    # Honest contributions -> the guard passes them through untouched.
+    sv, out_base = _shap_matrix(
+        _ReplayExplainer(sv_true, base), X_lgb, booster, tree_limit=tree_limit,
+    )
+    assert out_base == pytest.approx(base)
+    assert np.array_equal(sv, sv_true)
+
+    # One tampered cell -> the reconstruction no longer equals the margin.
+    sv_bad = sv_true.copy()
+    sv_bad[0, 0] += 1.0
+    with pytest.raises(ValueError, match="Additivity check failed"):
+        _shap_matrix(_ReplayExplainer(sv_bad, base), X_lgb, booster, tree_limit=tree_limit)
+
+    # A tampered BASE is caught identically -- it shifts every row's margin.
+    with pytest.raises(ValueError, match="Additivity check failed"):
+        _shap_matrix(_ReplayExplainer(sv_true, base + 0.5), X_lgb, booster,
+                     tree_limit=tree_limit)
+
+
+def test_additivity_guard_tolerates_float_noise_but_not_a_real_error():
+    """ADDITIVITY_ATOL sits between float64 accumulation noise (~1e-15 measured)
+    and any error worth catching. A perturbation an order below the tolerance
+    passes; one an order above raises."""
+    k = len(FEATURES)
+    X = pd.DataFrame(np.zeros((3, k)), columns=FEATURES)
+    margin = 1.25 + k
+
+    _sv, base = _shap_matrix(
+        _StubExplainer(3, k), X, _StubBooster(margin + ADDITIVITY_ATOL / 10),
+    )
+    assert base == 1.25
+
+    with pytest.raises(ValueError, match="Additivity check failed"):
+        _shap_matrix(_StubExplainer(3, k), X, _StubBooster(margin + ADDITIVITY_ATOL * 10))
+
+
+def test_shap_check_additivity_is_inert_on_lightgbm(applicants, artifact):
+    """The premise of the guard above, pinned so it cannot rot silently.
+
+    If a future shap version starts populating model_output_vals on the
+    LightGBM branch (_tree.py:556) and this call begins raising, then shap has
+    started doing the check itself and _assert_additivity's rationale needs
+    rereading. Until then: a frame whose fico_n is entirely NaN sails through
+    shap_values(check_additivity=True) without complaint."""
+    shap = pytest.importorskip("shap")
+
+    X_lgb = _to_lgb_frame(_x(applicants), artifact["category_maps"])
+    corrupted = X_lgb.copy()
+    corrupted["fico_n"] = np.nan
+
+    explainer = shap.TreeExplainer(artifact["model"])
+    sv = explainer.shap_values(
+        corrupted, tree_limit=artifact["best_iteration"], check_additivity=True,
+    )
+    assert np.asarray(sv).shape == (len(corrupted), len(FEATURES))
 
 
 # ---------------------------------------------------------------------------

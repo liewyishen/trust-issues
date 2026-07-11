@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 
 import pandas as pd
+import pytest
 from metaflow import FlowSpec
 
 from pipelines.training_flow import (
@@ -28,7 +29,10 @@ from pipelines.training_flow import (
     eval_scalars,
     fairness_scalars,
     feature_date_columns,
+    guarded_importance,
+    importance_metrics,
 )
+from src.features import FEATURES
 
 
 # --- Structure -----------------------------------------------------------------
@@ -38,10 +42,21 @@ def test_flow_is_a_flowspec():
 
 
 def test_flow_has_expected_linear_steps():
-    # The pipeline is load -> train -> calibrate -> evaluate -> fairness, framed
-    # by Metaflow's mandatory start/end.
-    for name in ["start", "train", "calibrate", "evaluate", "fairness", "end"]:
+    # The pipeline is load -> train -> calibrate -> evaluate -> fairness ->
+    # explain, framed by Metaflow's mandatory start/end.
+    for name in ["start", "train", "calibrate", "evaluate", "fairness", "explain", "end"]:
         assert callable(getattr(TrainingFlow, name)), f"missing step: {name}"
+
+
+def test_flow_has_explain_step_between_fairness_and_end():
+    """explain is a real inserted node on the DAG -- fairness -> explain -> end,
+    not an orphan method. Read from Metaflow's own graph, so a broken
+    self.next() rewiring fails HERE rather than only at a full flow run."""
+    from metaflow.graph import FlowGraph
+
+    nodes = FlowGraph(TrainingFlow).nodes
+    assert nodes["fairness"].out_funcs == ["explain"]
+    assert nodes["explain"].out_funcs == ["end"]
 
 
 # --- calib_scalars -------------------------------------------------------------
@@ -175,3 +190,64 @@ def test_extracted_scalars_are_finite_floats():
     }
     for v in calib_scalars(metrics).values():
         assert math.isfinite(v)
+
+
+# --- importance_metrics (pure extractor, like calib_scalars) -------------------
+
+def test_importance_metrics_keys_and_finite_floats():
+    """global_importance()'s frame -> one shap_importance_<feature> metric per
+    FEATURE, every value a finite float, the feature->value mapping preserved."""
+    values = {feat: 0.1 * (i + 1) for i, feat in enumerate(FEATURES)}
+    imp = pd.DataFrame({"feature": list(values), "mean_abs_shap": list(values.values())})
+
+    out = importance_metrics(imp)
+
+    assert set(out) == {f"shap_importance_{f}" for f in FEATURES}
+    assert len(out) == len(FEATURES) == 8
+    assert all(isinstance(v, float) and math.isfinite(v) for v in out.values())
+    for feat, val in values.items():
+        assert out[f"shap_importance_{feat}"] == val
+
+
+# --- guarded_importance: fail-OPEN wrapper -------------------------------------
+
+def test_guarded_importance_returns_metrics_on_success():
+    imp = pd.DataFrame({"feature": FEATURES, "mean_abs_shap": [0.1] * len(FEATURES)})
+    metrics, reason = guarded_importance(lambda: imp)
+    assert reason is None
+    assert len(metrics) == len(FEATURES)
+
+
+def test_guarded_importance_skips_on_importerror_not_raises():
+    """A missing/moved shap (ImportError) becomes a SKIP reason, never a raise --
+    the flow must survive an unavailable explainer, not die for one."""
+    def boom():
+        raise ImportError("No module named 'shap'")
+
+    metrics, reason = guarded_importance(boom)
+    assert metrics is None
+    assert reason is not None and reason.startswith("ImportError")
+
+
+# --- guarded_importance: fail-CLOSED boundary ----------------------------------
+
+def test_guarded_importance_does_not_swallow_additivity_valueerror():
+    """The inner additivity guard's ValueError (src/explain.py:221) is NOT in
+    _EXPLAIN_SKIP_ERRORS, so it propagates and hard-stops the flow: a
+    wrong-but-numeric ranking must be neither logged nor hidden."""
+    def boom():
+        raise ValueError("Additivity check failed -- refusing to explain.")
+
+    with pytest.raises(ValueError, match="Additivity check failed"):
+        guarded_importance(boom)
+
+
+def test_guarded_importance_does_not_swallow_typeerror():
+    """A class that could be a shap API drift OR an ordinary bug (TypeError)
+    propagates rather than silently skipping -- the fail-open allowlist admits
+    only unambiguous resource/availability failures, never a maybe-a-bug."""
+    def boom():
+        raise TypeError("unexpected shap return contract")
+
+    with pytest.raises(TypeError):
+        guarded_importance(boom)

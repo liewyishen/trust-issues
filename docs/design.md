@@ -73,7 +73,7 @@ Depth: [`data-decisions.md`](data-decisions.md) (data quality, fairness);
 
 ## 4. Not yet wired
 
-- **`serving/` does not exist.** Nothing here answers an HTTP request.
+- **`serving/` is not deployed.** `serving/app.py` answers HTTP requests in-process and under Docker, but nothing runs it as a live service — no host, no orchestration.
 - **`drift_check.py` is a manual entry point**, not a scheduled job — no CI, no cron,
   no scheduler exists here. It reports; it does not raise (`fail_on_alarm=False`).
 - **`SHAP_SAMPLE_N = 4000`** is inherited from the notebook, with no stated rationale

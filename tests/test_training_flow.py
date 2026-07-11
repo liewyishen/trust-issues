@@ -209,7 +209,12 @@ def test_importance_metrics_keys_and_finite_floats():
         assert out[f"shap_importance_{feat}"] == val
 
 
-# --- guarded_importance: fail-OPEN wrapper -------------------------------------
+# --- guarded_importance: fail-OPEN over ALL THREE allowlisted types ------------
+# _EXPLAIN_SKIP_ERRORS is a positive allowlist of three types (ImportError,
+# MemoryError, OSError). Pinning all three -- not just one -- documents the
+# allowlist itself: three passing types is the contract, one is only a sample of
+# it. If a type is ever dropped from the allowlist, its test flips from
+# skip-reason to raised-exception and fails here.
 
 def test_guarded_importance_returns_metrics_on_success():
     imp = pd.DataFrame({"feature": FEATURES, "mean_abs_shap": [0.1] * len(FEATURES)})
@@ -227,6 +232,32 @@ def test_guarded_importance_skips_on_importerror_not_raises():
     metrics, reason = guarded_importance(boom)
     assert metrics is None
     assert reason is not None and reason.startswith("ImportError")
+
+
+def test_guarded_importance_skips_on_memoryerror():
+    """The 4000 x trees SHAP matrix not fitting (MemoryError) is a resource
+    failure, also fail-open -- the model is intact, the explainer just cannot
+    run here right now."""
+    def boom():
+        raise MemoryError()
+
+    metrics, reason = guarded_importance(boom)
+    assert metrics is None
+    assert reason is not None and reason.startswith("MemoryError")
+
+
+def test_guarded_importance_skips_on_oserror():
+    """An artifact file unreadable this instant (OSError) is fail-open too. Raised
+    here as FileNotFoundError -- an OSError SUBCLASS -- to pin that the allowlist
+    catches the whole OSError family, which is how the real failure (a transient
+    I/O race; a genuinely missing artifact would already have hard-stopped
+    calibrate) actually surfaces."""
+    def boom():
+        raise FileNotFoundError("models/lgbm_model.pkl unreadable mid-run")
+
+    metrics, reason = guarded_importance(boom)
+    assert metrics is None
+    assert reason is not None and reason.startswith("FileNotFoundError")
 
 
 # --- guarded_importance: fail-CLOSED boundary ----------------------------------

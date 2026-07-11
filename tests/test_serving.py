@@ -3,14 +3,16 @@ Tests for serving/
 
 Doesn't re-test scoring, calibration or attribution -- tests/test_explain.py
 owns those, and serving/ reaches all three THROUGH explain_applicants(). What's
-locked down here is the SERVING CONTRACT, the twelve things that are true of the
+locked down here is the SERVING CONTRACT, the things that are true of the
 HTTP boundary and of nothing beneath it:
 
   1. The threshold is the one select_threshold() chose (0.25000000000000006),
      not explain.py's literal 0.25, and the two decide differently at p_cal
      exactly 0.25.
-  2. ScoreResponse mirrors explain_applicants()'s dict key-for-key. This is the
-     test that makes serving/ an adapter instead of a second implementation.
+  2. ScoreResponse mirrors explain_applicants()'s dict key-for-key, PLUS three
+     bureau-provenance fields explain_applicants() knows nothing about. This
+     is the test that makes serving/ an adapter instead of a second
+     implementation, for everything explain_applicants() is responsible for.
   3. JSON null on emp_length IS "NI" -- byte-identical responses -- and an
      unmapped string is a 422, not a silent collapse onto null's encoding.
   4. No request that validates can produce the off-manifold state
@@ -19,10 +21,13 @@ HTTP boundary and of nothing beneath it:
   5. An unseen `purpose` is rejected, not scored from LightGBM's untrained NaN
      bin.
   6. A missing field is a 422; so is an extra one (extra="forbid", the
-     deliberate asymmetry with LOAN_SCHEMA's strict=False).
-  7. Floats are strict: int 700 and float 700.0 are accepted, the string "700"
-     is not. Verified behavior, not assumed -- see the test.
-  8. Missing artifacts at startup raise. lifespan does not swallow them.
+     deliberate asymmetry with LOAN_SCHEMA's strict=False) -- including a
+     client-submitted fico_n, which is real and model-consumed but no longer
+     a request field at all.
+  7. Floats are strict: int and float are accepted, a numeric string is not.
+     Verified behavior, not assumed -- see the test.
+  8. Missing artifacts at startup raise. lifespan does not swallow them. Same
+     for a missing bureau client -- mirrors the artifact case exactly.
   9. A feature-contract mismatch fails closed THROUGH serving/, and so does a
      category set that has drifted from the shipped model's.
  10. A stale calibrator fails closed through serving/.
@@ -34,6 +39,13 @@ HTTP boundary and of nothing beneath it:
      The concurrency hazard is invisible to a single-threaded test client, so
      the construction count is the only thing that can hold the decision in
      place.
+ 13. fico_n comes from CreditBureau.fetch(applicant_id), not from the
+     request: the bureau is called with exactly the submitted applicant_id,
+     the three provenance fields it returns (bureau, fico_version,
+     credit_report_pulled_at) surface in the response, and the same
+     applicant_id scores reproducibly across independent /score calls -- the
+     same determinism MockBureau itself guarantees (tests/test_bureau.py),
+     now proven through the HTTP layer.
 
 Plus, carried across the HTTP boundary from tests/test_explain.py: no
 probability-scale contribution leaks into the response.
@@ -42,6 +54,8 @@ Run:  pytest tests/test_serving.py -v
 """
 
 from __future__ import annotations
+
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -59,21 +73,35 @@ from src.explain import DEFAULT_EXPLAIN_THRESHOLD, explain_applicants
 
 from serving.app import create_app
 from serving.artifacts import load_bundle
+from serving.bureau import CreditBureau, CreditReport, MockBureau
 from serving.config import SELECTED_THRESHOLD
 from serving.schema import EMP_LENGTH_NOT_DISCLOSED, VALID_EMP_LENGTH, ScoreRequest, ScoreResponse
 
 REASON_CODE_KEYS = {"rank", "feature", "value", "contribution_log_odds"}
+BUREAU_PROVENANCE_KEYS = {"bureau", "fico_version", "credit_report_pulled_at"}
 
 # One applicant that scores cleanly. Every test below mutates a copy of this.
+# This is the REQUEST shape: applicant_id + six applicant-reported fields.
+# fico_n is bureau-sourced now (serving/bureau.py) -- it is NOT here, and a
+# client that submits its own is a 422 (test_extra_field_is_422).
 GOOD = {
+    "applicant_id": "applicant-0001",
     "revenue": 60_000.0,
     "dti_n": 18.0,
     "loan_amnt": 10_000.0,
-    "fico_n": 700.0,
     "emp_length": "5 years",
     "purpose": "debt_consolidation",
     "home_ownership_n": "RENT",
 }
+
+# The RAW MODEL INPUT shape -- what explain_applicants()/add_features()/_x()
+# actually consume. Diverges from GOOD as of the bureau wiring: it carries
+# fico_n (a real model feature, bureau-sourced at the HTTP layer) and drops
+# applicant_id (not a model feature, only a bureau lookup key). Tests that
+# call _x()/explain_applicants() directly -- bypassing the HTTP layer and its
+# bureau fetch -- use this instead of GOOD.
+GOOD_RAW = {k: v for k, v in GOOD.items() if k != "applicant_id"}
+GOOD_RAW["fico_n"] = 700.0
 
 
 def _make_split(n, rng):
@@ -145,8 +173,13 @@ def bundle(model_path, calibrator_path):
 
 
 @pytest.fixture
-def client(bundle):
-    return TestClient(create_app(bundle=bundle))
+def bureau():
+    return MockBureau()
+
+
+@pytest.fixture
+def client(bundle, bureau):
+    return TestClient(create_app(bundle=bundle, bureau=bureau))
 
 
 # ---------------------------------------------------------------------------
@@ -173,14 +206,21 @@ def test_service_scores_with_the_selected_threshold(client):
 
 
 def test_decision_is_reject_iff_p_cal_at_or_above_threshold(client, synthetic_splits):
-    """Both sides, over many applicants: the comparison is >= on p_calibrated."""
+    """Both sides, over many applicants: the comparison is >= on p_calibrated.
+
+    fico_n is bureau-sourced now, not read off the synthetic row -- the row's
+    own fico_n is irrelevant to what actually gets scored, and this assertion
+    doesn't need it: it only checks the response's own decision/p_calibrated/
+    threshold are mutually consistent, which holds regardless of where fico_n
+    came from.
+    """
     seen_reject = seen_approve = False
-    for _, row in synthetic_splits["test"].head(25).iterrows():
-        payload = {k: row[k] for k in GOOD}
+    for i, (_, row) in enumerate(synthetic_splits["test"].head(25).iterrows()):
+        payload = {k: row[k] for k in GOOD if k != "applicant_id"}
+        payload["applicant_id"] = f"synthetic-{i:03d}"
         payload["revenue"] = float(payload["revenue"])
         payload["dti_n"] = float(payload["dti_n"])
         payload["loan_amnt"] = float(payload["loan_amnt"])
-        payload["fico_n"] = float(payload["fico_n"])
         body = client.post("/score", json=payload).json()
         expected = "REJECT" if body["p_calibrated"] >= body["threshold"] else "APPROVE"
         assert body["decision"] == expected
@@ -193,11 +233,17 @@ def test_decision_is_reject_iff_p_cal_at_or_above_threshold(client, synthetic_sp
 # 2. The response cannot drift from the function it serializes.
 # ---------------------------------------------------------------------------
 def test_response_mirrors_explain_applicants_key_for_key(bundle, model_path, calibrator_path):
+    """GOOD_RAW, not GOOD: explain_applicants() consumes the RAW model-input
+    shape (has fico_n, no applicant_id), which is no longer identical to the
+    REQUEST shape now that fico_n is bureau-sourced. The three bureau fields
+    are subtracted because explain_applicants() doesn't produce them --
+    /score fills them in separately from the CreditReport it fetched."""
     direct = explain_applicants(
-        pd.DataFrame([GOOD]), model_path=model_path,
+        pd.DataFrame([GOOD_RAW]), model_path=model_path,
         calibrator_path=calibrator_path, threshold=bundle.threshold,
     )[0]
-    assert set(ScoreResponse.model_fields) == set(direct)
+    non_bureau_fields = set(ScoreResponse.model_fields) - BUREAU_PROVENANCE_KEYS
+    assert non_bureau_fields == set(direct)
 
 
 def test_reason_code_key_set_is_exact(client):
@@ -239,8 +285,12 @@ def test_normalization_happens_before_the_frame_is_built(client):
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("emp", [None, *sorted(VALID_EMP_LENGTH)])
 def test_no_validated_request_can_encode_off_manifold(emp):
+    """request.model_dump() no longer carries fico_n (bureau-sourced now), but
+    _x() needs it -- merge in a fixed valid value, mirroring what /score's
+    _to_raw_frame does with a real bureau fetch."""
     request = ScoreRequest(**{**GOOD, "emp_length": emp})
-    engineered = _x(pd.DataFrame([request.model_dump()]))
+    raw = {**request.model_dump(exclude={"applicant_id"}), "fico_n": 700.0}
+    engineered = _x(pd.DataFrame([raw]))
     ord_, missing = engineered.iloc[0]["emp_length_ord"], engineered.iloc[0]["emp_length_missing"]
     assert not (pd.isna(ord_) and missing == 0), f"{emp!r} encoded off-manifold"
     # And the only way to get ord=NaN is to have declared non-disclosure.
@@ -249,12 +299,16 @@ def test_no_validated_request_can_encode_off_manifold(emp):
 
 
 def test_the_off_manifold_state_is_what_we_claim_it_is():
-    """Guard the premise: an UNVALIDATED null really does encode (NaN, 0)."""
-    engineered = _x(pd.DataFrame([{**GOOD, "emp_length": None}]))
+    """Guard the premise: an UNVALIDATED null really does encode (NaN, 0).
+
+    GOOD_RAW, not GOOD: this calls _x() directly, which needs the RAW
+    model-input shape (has fico_n), not the request shape.
+    """
+    engineered = _x(pd.DataFrame([{**GOOD_RAW, "emp_length": None}]))
     assert pd.isna(engineered.iloc[0]["emp_length_ord"])
     assert engineered.iloc[0]["emp_length_missing"] == 0
     # ... and so does an arbitrary string. Indistinguishable.
-    bogus = _x(pd.DataFrame([{**GOOD, "emp_length": "bogus"}]))
+    bogus = _x(pd.DataFrame([{**GOOD_RAW, "emp_length": "bogus"}]))
     assert pd.isna(bogus.iloc[0]["emp_length_ord"])
     assert bogus.iloc[0]["emp_length_missing"] == 0
 
@@ -288,6 +342,10 @@ def test_missing_field_is_422(client, dropped):
 def test_extra_field_is_422(client):
     assert client.post("/score", json={**GOOD, "zip_code": "021xx"}).status_code == 422
     assert client.post("/score", json={**GOOD, "addr_state": "CA"}).status_code == 422
+    # fico_n is real and model-consumed, but no longer a request field: the
+    # service sources it from the bureau now, and a client that submits its
+    # own gets the same 422 as any other unrecognized field.
+    assert client.post("/score", json={**GOOD, "fico_n": 700.0}).status_code == 422
     assert client.post("/score", json=GOOD).status_code == 200
 
 
@@ -296,17 +354,24 @@ def test_extra_field_is_422(client):
 #    was measured (pydantic 2.13.4) rather than assumed.
 # ---------------------------------------------------------------------------
 def test_strict_floats_name_the_behavior_for_all_three_inputs(client):
-    assert client.post("/score", json={**GOOD, "fico_n": 700.0}).status_code == 200   # float
-    assert client.post("/score", json={**GOOD, "fico_n": 700}).status_code == 200     # int, widened
-    assert client.post("/score", json={**GOOD, "fico_n": "700"}).status_code == 422   # str, rejected
+    """fico_n moved to the bureau and can no longer carry this contract test
+    (it isn't a request field at all). revenue is still applicant-reported
+    and still Field(strict=True), so it takes over as the strict-float
+    example."""
+    assert client.post("/score", json={**GOOD, "revenue": 60_000.0}).status_code == 200  # float
+    assert client.post("/score", json={**GOOD, "revenue": 60_000}).status_code == 200    # int, widened
+    assert client.post("/score", json={**GOOD, "revenue": "60000"}).status_code == 422   # str, rejected
 
 
 def test_strict_floats_reject_bool_which_lax_mode_would_call_1_point_0(client):
-    assert client.post("/score", json={**GOOD, "fico_n": True}).status_code == 422
+    assert client.post("/score", json={**GOOD, "revenue": True}).status_code == 422
 
 
 def test_out_of_band_numerics_are_422(client):
-    assert client.post("/score", json={**GOOD, "fico_n": 250.0}).status_code == 422    # < FICO_MIN
+    """fico_n's out-of-band case moved out of this test: it is no longer a
+    request field, so a client can no longer submit an out-of-band value for
+    it at all (test_extra_field_is_422 covers the now-relevant behavior --
+    submitting fico_n in any form is 422, regardless of value)."""
     assert client.post("/score", json={**GOOD, "loan_amnt": 1e9}).status_code == 422   # > LOAN_MAX
     assert client.post("/score", json={**GOOD, "dti_n": -1.0}).status_code == 422      # negative
     assert client.post("/score", json={**GOOD, "dti_n": 999.0}).status_code == 200     # the sentinel
@@ -325,12 +390,26 @@ def test_present_artifacts_load(model_path, calibrator_path):
 
 
 def test_score_is_503_when_the_bundle_is_absent(bundle):
-    """Reachable only without startup -- which is exactly this. See serving/errors.py."""
-    app = create_app(bundle=bundle)
+    """Reachable only without startup -- which is exactly this. See serving/errors.py.
+
+    bureau is injected here so the ONLY missing piece is the bundle -- without
+    it, app.state.bureau would also be unset (create_app(bundle=bundle) alone
+    skips lifespan entirely), and the 503 below would be ambiguous about which
+    dependency actually caused it.
+    """
+    app = create_app(bundle=bundle, bureau=MockBureau())
     app.state.bundle = None
     unloaded = TestClient(app)
     assert unloaded.post("/score", json=GOOD).status_code == 503
     assert unloaded.get("/healthz").status_code == 503
+
+
+def test_score_is_503_when_the_bureau_is_absent(bundle):
+    """The bureau side of the same reachable-only-in-tests unloaded state."""
+    app = create_app(bundle=bundle, bureau=MockBureau())
+    app.state.bureau = None
+    unloaded = TestClient(app)
+    assert unloaded.post("/score", json=GOOD).status_code == 503
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +565,69 @@ def test_probability_fields_that_do_belong_are_predictions_not_attributions(clie
     assert {"p_raw", "p_calibrated"} <= set(body)
     assert all(k.endswith("_log_odds") for k in
                ("base_value_log_odds", "raw_margin_log_odds", "contributions_log_odds"))
+
+
+# ---------------------------------------------------------------------------
+# 14. fico_n comes from CreditBureau.fetch(applicant_id), not the request.
+#     The bureau is called with the submitted applicant_id, its provenance
+#     surfaces in the response, and the same applicant_id scores
+#     reproducibly across independent /score calls.
+# ---------------------------------------------------------------------------
+class _SpyBureau:
+    """Wraps MockBureau, recording every applicant_id fetch() was called with."""
+
+    def __init__(self):
+        self._inner = MockBureau()
+        self.calls: list[str] = []
+
+    def fetch(self, applicant_id: str) -> CreditReport:
+        self.calls.append(applicant_id)
+        return self._inner.fetch(applicant_id)
+
+
+def test_bureau_is_called_with_the_requests_applicant_id(bundle):
+    spy = _SpyBureau()
+    client = TestClient(create_app(bundle=bundle, bureau=spy))
+    assert client.post("/score", json=GOOD).status_code == 200
+    assert spy.calls == [GOOD["applicant_id"]]
+
+
+def test_response_carries_bureau_provenance(client, bureau):
+    report = bureau.fetch(GOOD["applicant_id"])
+    body = client.post("/score", json=GOOD).json()
+    assert body["bureau"] == report.bureau == "mock"
+    assert body["fico_version"] == report.fico_version
+    # datetime round-trips through JSON as an ISO string (pydantic v2 emits a
+    # "Z" suffix for UTC rather than "+00:00" -- parse both back to compare
+    # the actual instant rather than the string spelling of it).
+    assert datetime.fromisoformat(body["credit_report_pulled_at"]) == report.pulled_at
+
+
+def test_same_applicant_id_scores_reproducibly_through_http(client):
+    """The determinism MockBureau itself guarantees (tests/test_bureau.py),
+    proven end to end through the HTTP layer: two independent /score calls
+    for the same applicant_id must be byte-identical."""
+    first = client.post("/score", json=GOOD).json()
+    second = client.post("/score", json=GOOD).json()
+    assert first == second
+
+
+def test_different_applicant_ids_can_score_differently(client):
+    """Sanity that fico_n genuinely varies with applicant_id through the HTTP
+    layer, not a constant silently plumbed through regardless of the bureau
+    call. Not a claim about specific values -- just that ten distinct
+    applicants don't all collapse to one margin."""
+    margins = {
+        client.post(
+            "/score", json={**GOOD, "applicant_id": f"applicant-{i:04d}"},
+        ).json()["raw_margin_log_odds"]
+        for i in range(10)
+    }
+    assert len(margins) > 1
+
+
+def test_blank_applicant_id_is_422(client):
+    assert client.post("/score", json={**GOOD, "applicant_id": ""}).status_code == 422
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-217%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-248%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -127,6 +127,47 @@ credit system.
 
 ---
 
+## Serving layer
+
+`serving/` is a FastAPI adapter over the trained model + calibrator: `POST /score` scores
+one applicant into a decision plus rank-ordered reason codes, `GET /healthz` reports
+readiness and the identity of what's loaded. It reuses `src/`'s logic rather than
+re-implementing it — `/score` calls `explain_applicants()` directly (`serving/app.py:189`),
+the same function `tests/test_explain.py` exercises, so production scoring and tested
+scoring run through one code path, not two.
+
+As of Phase 1, `fico_n` is no longer self-reported by the applicant. `POST /score` takes an
+`applicant_id` instead, and the service fetches `fico_n` from a `CreditBureau` — a
+one-method protocol, `fetch(applicant_id) -> CreditReport` (`serving/bureau.py`), so a real
+bureau client can be swapped in later without touching `/score`. The only implementation
+wired in today is `MockBureau`: deterministic — the same `applicant_id` always returns a
+byte-identical report, performing no I/O to do it (`serving/bureau.py:168-175`) — with
+`fico_n` drawn from a `Normal(mean_fico, std_fico)` distribution seeded by the applicant ID
+(`serving/bureau.py:191-212`). `mean_fico` defaults to 700 and is a constructor argument,
+not a constant: `MockBureau(mean_fico=650)` shifts the entire output distribution, a
+deliberate knob for demonstrating a population-level credit-quality drift without touching
+a real bureau record.
+
+Every score response carries three provenance fields alongside the decision — `bureau`,
+`fico_version`, `credit_report_pulled_at` (`serving/schema.py:277-279`) — the same "a
+decision must be able to identify the data it came from" principle already behind the
+`model_trained_at` / `calibrator_trained_at` fields on every response.
+
+Honestly: `MockBureau` is, by its own docstring, "a `CreditBureau` that never calls a real
+vendor" (`serving/bureau.py:164-166`) — no real bureau is integrated. `serving/` answers
+requests in-process and under Docker but is not deployed anywhere: no host, no
+orchestration ([`docs/design.md`](docs/design.md) §4). A failed bureau pull is a known,
+deliberately deferred gap — `CreditBureau.fetch()`'s contract permits raising, but `/score`
+doesn't yet catch it, because `MockBureau` performs no I/O and cannot fail
+(`serving/errors.py:20-24`; full record in
+[`docs/data-decisions.md`](docs/data-decisions.md)). And the "no credit-bureau history"
+phrasing above and in "What this isn't" is about the *model's* feature set — eight
+application-time features, none of them utilization, delinquency, or inquiry history — not
+about whether serving has any bureau data path at all; it now does, just not one feeding
+new model features yet.
+
+---
+
 ## Tech stack
 
 | Tool | Role in this project |
@@ -139,7 +180,7 @@ credit system.
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
-| **pytest** | 217 tests across the modeling layer |
+| **pytest** | 248 tests across the modeling layer |
 
 ---
 
@@ -147,7 +188,7 @@ credit system.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (217 passing)
+uv run pytest                                        # run the test suite (248 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
@@ -177,7 +218,9 @@ notebooks/     Exploratory analysis notebook (+ HTML export)
 pipelines/     Metaflow end-to-end training pipeline + the yearly dti_n drift check
 src/           Modeling layer: data loading, validation, features, leakage checks,
                training, calibration, evaluation, fairness, explanation
+serving/       FastAPI HTTP scoring adapter (/score, /healthz) + the credit-bureau
+               protocol/mock (bureau.py) -- not deployed (see docs/design.md §4)
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (217 passing)
+tests/         pytest suite (248 passing)
 ```

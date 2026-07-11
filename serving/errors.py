@@ -17,6 +17,13 @@ The error taxonomy, and why each failure lands where it does.
       an explanation. Fail closed, log the guard's full message, return a body
       that leaks none of it.
 
+      A CreditBureau.fetch() failure is NOT handled here -- deliberately, not
+      by oversight. MockBureau (the only implementation wired in today)
+      performs no I/O and cannot fail, so there is no reachable case to catch
+      yet; a real bureau client's failure mode is out of scope until it is
+      actually wired in. See docs/data-decisions.md's Phase 1 bureau-wiring
+      entry for the recorded deferral.
+
 503 -- in production, NOTHING.
 
       A missing pickle (FileNotFoundError), a feature-contract mismatch
@@ -27,10 +34,11 @@ The error taxonomy, and why each failure lands where it does.
       exit non-zero, and the orchestrator to show a crash loop. A process that
       never serves emits no status code at all.
 
-      The 503 branch below therefore exists for one reachable case: an app
-      object constructed without running startup, which is how tests exercise
-      the unloaded state. It is not dead code and it is not a production path.
-      Saying so is cheaper than discovering it later.
+      The 503 branch below therefore exists for two reachable cases: an app
+      object constructed without running startup for the model artifacts, or
+      for the bureau client -- which is how tests exercise each unloaded
+      state. Neither is dead code and neither is a production path. Saying so
+      is cheaper than discovering it later.
 """
 
 from __future__ import annotations
@@ -41,5 +49,12 @@ ADDITIVITY_FAILURE_DETAIL = (
     "Explanation failed an internal consistency check. No decision was returned."
 )
 
-# The 503 body. See the module docstring on why this is not a production path.
+# The 503 body for a missing model bundle. See the module docstring on why
+# this is not a production path.
 ARTIFACTS_UNAVAILABLE_DETAIL = "Model artifacts are not loaded."
+
+# The 503 body for a missing bureau client -- the same "unloaded state,
+# reachable only in tests" case as ARTIFACTS_UNAVAILABLE_DETAIL above, kept as
+# a separate message because a bureau is not a model artifact and saying so
+# would misname the actual gap.
+BUREAU_UNAVAILABLE_DETAIL = "Credit bureau is not loaded."

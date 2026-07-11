@@ -11,6 +11,7 @@ list is the drift features.py's feature contract exists to prevent.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -18,8 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.data_validation import (
     DTI_MAX_REAL,
     DTI_SENTINEL,
-    FICO_MAX,
-    FICO_MIN,
     LOAN_MAX,
     LOAN_MIN,
     REVENUE_MIN,
@@ -43,13 +42,28 @@ VALID_EMP_LENGTH: frozenset[str] = frozenset(emp_order) | {EMP_LENGTH_NOT_DISCLO
 
 class ScoreRequest(BaseModel):
     """
-    One applicant. Seven raw application-time fields.
+    One applicant: six applicant-reported fields, plus applicant_id.
 
-    Feature engineering turns these seven into the eight the model scores
-    (features.py: emp_length yields both emp_length_ord and the explicit
-    emp_length_missing flag). The service accepts the seven; it never accepts
-    the eight, because a client that can set emp_length_missing independently
-    of emp_length can describe an applicant who does not exist.
+    applicant_id identifies the applicant to the credit-bureau layer
+    (serving/bureau.py's CreditBureau protocol) -- it is not itself a model
+    feature. fico_n is NO LONGER an applicant-reported field as of Phase 1's
+    bureau wiring: serving/app.py's /score handler fetches it via
+    CreditBureau.fetch(applicant_id) and merges it with these six fields
+    before feature engineering runs (see _to_raw_frame in serving/app.py).
+    extra="forbid" below means a client that submits its own fico_n gets the
+    same 422 as submitting any other unrecognized field -- the service, not
+    the applicant, is now that value's source of truth. dti_n stays
+    applicant-reported this round: Phase 1 moved fico_n first and
+    deliberately left dti_n for a later step (see docs/data-decisions.md).
+
+    Feature engineering turns the resulting seven raw fields (these six plus
+    the bureau-sourced fico_n) into the eight the model scores (features.py:
+    emp_length yields both emp_length_ord and the explicit
+    emp_length_missing flag). The service accepts six applicant fields; it
+    never accepts fico_n, emp_length_missing, or emp_length_ord directly,
+    because a client that could set any of those independently can describe
+    an applicant who does not exist -- or, for fico_n specifically, an
+    applicant whose score did not come from a bureau pull at all.
 
     ------------------------------------------------------------------------
     emp_length: JSON `null` MEANS "declined to disclose", and is normalized to
@@ -88,8 +102,12 @@ class ScoreRequest(BaseModel):
 
     1. `extra="forbid"`, where LOAN_SCHEMA sets strict=False
        (data_validation.py:186). A training frame legitimately carries id,
-       issue_d, zip_code. A REQUEST that carries an eighth field is a client
-       that believes it is sending something the model reads. It is not.
+       issue_d, zip_code. A REQUEST that carries an unrecognized field is a
+       client that believes it is sending something the model reads. It is
+       not -- and as of the bureau wiring, this now also catches a client
+       that submits its own fico_n: that field is real and model-consumed,
+       and still rejected here, because the service sources it independently
+       and a client-submitted value would silently go nowhere.
 
     2. An unseen `purpose` is rejected, where _to_lgb_frame degrades it to NaN
        and scores it (train.py:151-159, which calls that degradation
@@ -115,10 +133,12 @@ class ScoreRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Identifies the applicant to the credit-bureau layer (CreditBureau.fetch,
+    # serving/bureau.py) -- not itself a model feature.
+    applicant_id: str = Field(min_length=1)
     revenue: float = Field(strict=True, ge=REVENUE_MIN)
     dti_n: float = Field(strict=True)
     loan_amnt: float = Field(strict=True, ge=LOAN_MIN, le=LOAN_MAX)
-    fico_n: float = Field(strict=True, ge=FICO_MIN, le=FICO_MAX)
     emp_length: str | None
     purpose: str
     home_ownership_n: str
@@ -196,11 +216,17 @@ class ReasonCode(BaseModel):
 
 class ScoreResponse(BaseModel):
     """
-    Mirrors explain_applicants()'s dict key-for-key (explain.py:443-458).
+    Mirrors explain_applicants()'s dict key-for-key (explain.py:443-458), plus
+    three bureau-provenance fields (bureau, fico_version,
+    credit_report_pulled_at) that /score fills in from the CreditReport it
+    fetched -- explain_applicants() knows nothing about the bureau layer and
+    never returns these three keys itself.
 
-    Not a reshaping of it, not a subset of it, not a renaming of it.
-    tests/test_serving.py asserts the two key sets are equal, so this model
-    cannot drift from the function it serializes.
+    Every other field is not a reshaping of explain_applicants()'s dict, not a
+    subset of it, not a renaming of it. tests/test_serving.py asserts the two
+    key sets are equal after subtracting the three bureau fields, so this
+    model cannot drift from the function it serializes on anything
+    explain_applicants() itself is responsible for.
 
     There is no `contribution_to_probability` key, not even set to None.
     docs/explainability.md Section 5 proves percentage-point attribution is
@@ -242,6 +268,15 @@ class ScoreResponse(BaseModel):
     reason_codes: list[ReasonCode]
     model_trained_at: str | None
     calibrator_trained_at: str | None
+    # Bureau provenance -- filled in by /score from the CreditReport it
+    # fetched (serving/bureau.py), not by explain_applicants(), which knows
+    # nothing about the bureau layer. Same rationale as model_trained_at /
+    # calibrator_trained_at above: a decision that used a bureau-sourced
+    # fico_n is a claim about an applicant-and-report pair, and should be
+    # able to identify which report.
+    bureau: str
+    fico_version: str
+    credit_report_pulled_at: datetime
 
 
 class HealthResponse(BaseModel):

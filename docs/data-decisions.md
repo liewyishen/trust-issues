@@ -514,3 +514,235 @@ of the with-state AUC a given file happened to quote.
 `auc_with_state`/`auc_no_state` from that run's MLflow metrics (not the
 terminal, not this doc) and re-standardize the README and `src/fairness.py`
 to the new authoritative values.
+
+---
+
+## Phase 1 credit-bureau foundation: CreditReport and MockBureau (data contract only, not wired to `/score`)
+
+**Date:** 2026-07-11.
+
+**Context:** Phase 1's goal is to move credit-bureau-shaped fields (starting
+with `fico_n`) from applicant self-report to a system-fetched bureau pull.
+This entry records the foundation built before any wiring happened: a data
+contract (`CreditReport`), a swappable interface (`CreditBureau`), and a
+deterministic mock implementation (`MockBureau`), all added in a new
+`serving/bureau.py`. `serving/schema.py`'s `ScoreRequest`, `serving/app.py`'s
+`/score` handler, and `src/explain.py`'s `explain_applicants()` are
+untouched -- none of them import from `serving/bureau.py`. Four decisions
+were made building it.
+
+**Decision 1: `CreditReport` carries only the credit fields the shipped
+model actually consumes (`fico_n`, `dti_n`) -- no field is added for report
+"completeness."**
+
+**Rationale:** the shipped model has exactly 8 features
+(`src/features.py:64-69`); of those, only `fico_n` and `dti_n` are
+credit-bureau-shaped. Fields a real bureau report also carries --
+`delinq_2yrs`, `open_acc`, `revol_util`, `total_acc`, and similar -- have no
+consumer anywhere in this codebase. `revol_util` specifically was confirmed
+via a repo-wide grep to have zero references in `src/`, `serving/`,
+`pipelines/`, `docs/`, or the README before this work; the only two mentions
+that exist now are in `serving/bureau.py:36` and `tests/test_bureau.py`,
+both naming it as an example of a field deliberately not added.
+
+**Trade-off:** `CreditReport` (`serving/bureau.py:83-146`) reads less like a
+complete, realistic bureau report than it could. That is accepted rather
+than fixed here -- the unconsumed fields stay out until the model has an
+actual use for them, deferred rather than added as dead weight.
+
+**Decision 2: `dti_n` is carried on `CreditReport` as a bureau-supplied,
+pre-computed field -- this layer computes no DTI.**
+
+**Rationale:** this repo's `dti_n` is read directly from the LendingClub
+source CSV (`src/data_loader.py:80-119`'s `load_raw()` parses dates and
+validates; it performs no DTI arithmetic) and is declared in `LOAN_SCHEMA`
+as a `Column`, not a derived value (`src/data_validation.py:123-144`).
+`src/features.py`'s `add_features()` passes `dti_n` through unmodified along
+with the other `NUMERIC` fields (`src/features.py:64`); there is no
+`monthly_debt` or other finer-grained raw field anywhere in this codebase a
+DTI formula could be built from. A real credit bureau supplies `dti_n` the
+same way -- pre-computed from the applicant's tradeline history, not derived
+by the lender's own serving code. `CreditReport.dti_n`
+(`serving/bureau.py:127-146`) therefore mirrors the exact band-or-sentinel
+constraint `ScoreRequest._dti_in_band_or_sentinel` already enforces
+(`serving/schema.py:126-143`), built from the same imported
+`DTI_MAX_REAL`/`DTI_SENTINEL` constants, and passes the value through
+unchanged.
+
+**Trade-off:** writing a `dti = debt / income` formula here was explicitly
+rejected, even though it would have made `CreditReport` self-sufficient --
+doing so would introduce a computation the training data never went
+through, the exact train/serve skew this project's core discipline (train
+the way you serve) exists to prevent. `CreditReport` therefore depends on
+whichever bureau implementation supplies it to hand over a pre-computed
+`dti_n`; this is a constraint imposed by the current data reality, not a
+design preference.
+
+**Decision 3: `MockBureau`'s `fico_n` is drawn from a
+`Normal(mean_fico, std_fico)` distribution seeded by `applicant_id`, with
+`mean_fico` a configurable constructor argument (default 700.0, `std_fico`
+default 50.0).**
+
+**Rationale:** two requirements had to hold simultaneously. Determinism --
+the same `applicant_id` must return a byte-identical report on every call,
+forever, verified by `tests/test_bureau.py::test_same_applicant_produces_same_report`
+and `::test_determinism_holds_across_separate_bureau_instances` -- is met by
+seeding a `numpy.random.default_rng` from a SHA-256 digest of
+`applicant_id` (`serving/bureau.py:191-221`), a pure function with no
+instance state, the same reproducibility discipline as
+`src/data_loader.py`'s `RANDOM_SEED = 42`. Controllability --
+`MockBureau(mean_fico=650)` must shift the whole output distribution, not
+just individual reports -- is why `mean_fico`/`std_fico` are constructor
+arguments (`serving/bureau.py:191-193`) rather than module constants: this
+is the knob a future drift-injection demo needs. An earlier hash-uniform
+design (mapping the hash directly to a uniform float across
+`[FICO_MIN, FICO_MAX]`) was considered and rejected: it had no adjustable
+mean and could not simulate a population-level shift, and a uniform
+distribution does not resemble a real population's FICO distribution
+(bell-shaped, clustered around a center, not flat).
+
+Measured evidence (this session, one-off verification script, run and
+discarded, not committed to the repo): fetching 100 distinct `applicant_id`s
+through `MockBureau(mean_fico=700.0)` produced a sample mean `fico_n` of
+706.13; through `MockBureau(mean_fico=650.0)`, 656.13 -- a ~50-point
+separation matching the ~50-point gap between the two `mean_fico` settings,
+confirming the knob moves the distribution as intended. `fico_n` is clipped
+into `[FICO_MIN, FICO_MAX]` after the normal draw (`serving/bureau.py:221`,
+both constants imported from `src/data_validation.py:90`), since
+`CreditReport.fico_n`'s own `Field(ge=FICO_MIN, le=FICO_MAX)` constraint
+would otherwise reject a tail draw outright.
+
+**Trade-off:** `mean_fico=700.0` / `std_fico=50.0` are demo assumptions
+about a "normal" population, not measured from this repo's real FICO
+distribution (`src/data_validation.py:88-90`'s comment puts the real
+observed band at approximately 612-847) or from any dataset here --
+documented as such in `MockBureau`'s docstring per this project's rule
+against silently armchaired numbers. A few extra lines of seeded-RNG code
+were accepted in exchange for a distribution that can actually demonstrate
+drift.
+
+**Decision 4: this round stayed strictly additive -- only
+`serving/bureau.py` and `tests/test_bureau.py` were created; nothing was
+wired into any existing module.**
+
+**Rationale:** wiring (removing `fico_n` from `ScoreRequest`, inserting a
+bureau call into `/score`) would touch `serving/schema.py` and
+`serving/app.py` and cascade into `tests/test_serving.py`'s 35 tests, 67 of
+which hardcode the current 7-field payload shape (confirmed by grep on
+`tests/test_serving.py`) -- a change with real blast radius, of a different
+character than laying a foundation. Splitting the two into separate steps
+keeps each one reviewable and revertible on its own.
+
+**Evidence:** after adding the two new files, the full suite collected 242
+tests (217 pre-existing + 25 new) and ran 242 passed / 0 failed. The one
+transient exception was
+`tests/test_readme.py::test_readme_test_count_matches_the_live_collection`,
+itself a self-checking invariant test (`tests/test_readme.py:75-93`) -- it
+correctly turned red the moment the live count diverged from the four
+`217`s still written in `README.md`, and was brought back to green by
+updating exactly those four occurrences (the badge and three prose
+mentions) to `242`, with no other number in `README.md` touched.
+
+**TODO:** wiring `CreditReport`/`MockBureau` into `ScoreRequest` and
+`/score` is a deliberately separate, not-yet-scheduled step (see Decision
+4). When it happens, re-run the full suite and expect
+`tests/test_serving.py` to need real edits, not just a re-collection.
+
+---
+
+## Phase 1 bureau wiring: `fico_n` is now sourced from `CreditBureau`, not the applicant
+
+**Date:** 2026-07-11.
+
+**Context:** the previous entry laid the foundation (`CreditReport`,
+`CreditBureau`, `MockBureau`) without wiring it to anything. This entry
+records that wiring: `fico_n` moves from applicant self-report to a
+bureau-fetched value on the live `/score` path. `dti_n` stays
+applicant-reported this round -- a confirmed decision, not an oversight:
+`MockBureau.fetch()` always produces a real, in-band `dti_n` (never the 999
+sentinel), so moving `dti_n` to the bureau this round would have made the
+sentinel-handling contract untestable at the HTTP boundary without also
+extending `MockBureau` to simulate sentinel-producing applicants -- out of
+scope for a wiring step. Moving `fico_n` alone also matches the "starting
+with `fico_n`" scope the prior entry already recorded.
+
+**What changed:**
+
+- `ScoreRequest` (`serving/schema.py`) drops `fico_n` and gains
+  `applicant_id: str = Field(min_length=1)`. The six remaining
+  applicant-reported fields are `revenue`, `dti_n`, `loan_amnt`,
+  `emp_length`, `purpose`, `home_ownership_n`. Submitting `fico_n` on a
+  request is now a 422 under the existing `extra="forbid"` gate, the same as
+  submitting any other unrecognized field.
+- `ScoreResponse` gains three bureau-provenance fields -- `bureau: str`,
+  `fico_version: str`, `credit_report_pulled_at: datetime` -- filled in by
+  `/score` from the `CreditReport` it fetched, not by `explain_applicants()`,
+  which knows nothing about the bureau layer and never returns these keys.
+  `tests/test_serving.py::test_response_mirrors_explain_applicants_key_for_key`
+  now asserts key-equality after subtracting these three, so the mirror
+  invariant still holds on everything `explain_applicants()` is actually
+  responsible for.
+- `serving/app.py` gains a `CreditBureau` dependency, injected exactly the
+  way `ArtifactBundle` already is: `lifespan()` constructs `MockBureau()`
+  once at startup, `get_bureau(request)` mirrors `get_bundle(request)`
+  (503 only in the reachable-only-in-tests unloaded-state case,
+  `serving/errors.py`'s new `BUREAU_UNAVAILABLE_DETAIL`), and
+  `create_app(bundle=None, bureau=None)` accepts a pre-built bureau for
+  tests. `/score` calls `bureau.fetch(applicant.applicant_id)` unguarded (see
+  the TODO below), then `_to_raw_frame(request, report)` merges the
+  six applicant fields with `report.fico_n` into the exact seven-field raw
+  dict `explain_applicants()`/`add_features()`/`_x()` already expected --
+  byte-identical in shape to what this function produced before the bureau
+  existed, just assembled from two sources instead of one.
+  `report.dti_n` and `report`'s provenance fields (`pulled_at`, `bureau`,
+  `fico_version`, `inquiry_window_days`) are deliberately NOT merged into
+  that frame: its contract is exactly the seven raw fields the model
+  expects, nothing more.
+- Nothing in `src/` or `pipelines/` changed. `explain_applicants()`,
+  `_x()`, and `add_features()` are untouched -- the merge produces a frame
+  identical in shape to what they already consumed, so there was nothing for
+  them to adapt to.
+
+**Test suite:** `tests/test_serving.py` went from 53 to 59 collected tests
+(6 new: bureau called with the request's `applicant_id`; the three
+provenance fields surface in the response and match the fetched
+`CreditReport`; the same `applicant_id` scores byte-identically across two
+independent `/score` calls; ten distinct `applicant_id`s don't collapse to
+one margin; a blank `applicant_id` is a 422; a missing bureau client is a
+503, mirroring the existing missing-bundle case). Nine existing tests were
+rewritten rather than left to pass by fixture-shape coincidence: the
+request/raw-frame shape split required a second fixture (`GOOD_RAW`, the
+seven-field model-input shape, alongside `GOOD`, the six-field-plus-
+`applicant_id` request shape) for the tests that call `_x()`/
+`explain_applicants()` directly; the two strict-float contract tests were
+retargeted from `fico_n` (no longer a request field) to `revenue`; the
+out-of-band-numerics test dropped its `fico_n` sub-case and the extra-field
+test gained one (submitting `fico_n` is now the relevant assertion); the
+missing-bundle 503 test now also injects a bureau, so that 503 is
+unambiguously attributable to the bundle alone. No test was deleted,
+skipped, or had an assertion weakened to reach green -- every change updates
+what the test checks to the new contract, verified by the same self-checking
+list this entry describes and re-run in full afterward: **248 tests
+collected, 247 passed** (the sole exception is `tests/test_readme.py`'s own
+self-checking test-count invariant, which correctly detected that
+`README.md`'s written counts no longer match the live collection -- README
+sync is outside this round's authorized file list and was left for a
+separate pass, the same as it was after the prior bureau-foundation entry).
+
+**TODO (deferred, a decision, not an oversight):** `CreditBureau.fetch()`'s
+docstring states it "raises on a failed pull" (`serving/bureau.py:159-160`),
+but `/score` calls it unguarded -- no `try`/`except`, no corresponding HTTP
+error class. This is not an omission: `MockBureau`, the only implementation
+wired in today, performs no I/O and cannot fail, so there is no reachable
+failure path to handle yet, and `serving/errors.py`'s taxonomy only
+documents branches that can actually be reached (see its own module
+docstring on why the existing 503 branches are "not dead code"). Building a
+catch block around a call that cannot fail would be exactly the
+speculative, "just in case" code this project's discipline argues against
+elsewhere (e.g. `ScoreResponse`'s deliberately absent
+`contribution_to_probability` field, `docs/explainability.md` Section 5).
+When a real bureau client is wired in, this is the first thing to add:
+`serving/errors.py` gains a fourth documented class (a 502, matching "an
+upstream dependency failed" semantics -- distinct from the existing 503,
+which means "this service never finished loading," not "a call to another
+service failed"), and `/score` wraps `bureau.fetch()` accordingly.

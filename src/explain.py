@@ -496,11 +496,26 @@ def explain_applicants(
     p_cal = np.asarray(p_cal, dtype=float)
 
     # The margin is reconstructed from the attribution rather than re-predicted:
-    # base + sum(contributions) IS the margin (tree_path_dependent SHAP is
-    # exactly additive, and shap's own check_additivity has already verified
-    # it). Deriving p_raw as sigmoid(margin) is exact, because objective=
-    # "binary" means Booster.predict() is precisely sigmoid of this quantity --
-    # tests/test_explain.py pins that identity to 0.0 absolute error.
+    # base + sum(contributions) IS the raw margin, because tree_path_dependent
+    # SHAP is exactly additive. That identity is the one shap's
+    # check_additivity=True is widely believed to guarantee and does not -- it
+    # is inert on the LightGBM branch (_tree.py:556; see _shap_matrix). What
+    # actually enforces it depends on which path reached this line:
+    #   - loading path: _shap_matrix just proved it, via _assert_additivity
+    #     (line 335), against booster.predict(raw_score=True).
+    #   - escape-hatch path: base_value and shap_values arrived precomputed and
+    #     are NOT re-checked here -- the hatch loaded no booster, so there is
+    #     nothing to check them against. Additivity rests on the caller having
+    #     verified them upstream. The one in-repo caller, run_explanation(),
+    #     does: it computes sv/base through _shap_matrix (line 689), where the
+    #     guard runs over the whole sample, before slicing one row back in here.
+    # So on the hatch path this reconstruction TRUSTS what _assert_additivity
+    # ENFORCES on the loading path -- a precondition on the caller, not a check
+    # made here, because the hatch holds no booster to make it with.
+    #
+    # Deriving p_raw as sigmoid(margin) is exact regardless of path: objective=
+    # "binary" means Booster.predict() is precisely sigmoid of this quantity,
+    # and tests/test_explain.py pins that identity to 0.0 absolute error.
     margins = float(base_value) + shap_values.sum(axis=1)
     p_raw = expit(margins)
 

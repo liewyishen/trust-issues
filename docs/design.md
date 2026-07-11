@@ -20,10 +20,10 @@ run**: the schema check and three of the four leakage sentinels. **Blue reports 
 halts nothing**: MLflow metrics, the temporal sentinel's SKIP, the drift check. **Grey
 dashed is not wired into the flow** — `pipelines/drift_check.py` (a manual entry point) is
 drawn outside the pipeline, not as connected. (`src/explain.py` was drawn there too; the
-`explain` step now wires it in, so the diagram is stale on that one point and is being
-regenerated.) No calibrator edge reaches `@fairness`, which refits its own isotonic inside
-`run_fairness_audit()`. Every label's file:line is in
-[`architecture.html`](architecture.html).
+`explain` step now wires it in, and the diagram — re-traced 2026-07-11 after the Phase 2
+`train.py` → `model_io.py` split — draws it in the flow.) No calibrator edge reaches
+`@fairness`, which refits its own isotonic inside `run_fairness_audit()`. Every label's
+symbol citation is in [`architecture.html`](architecture.html).
 
 ## 3. Design decisions and their costs
 

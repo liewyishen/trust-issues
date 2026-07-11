@@ -18,7 +18,7 @@
 </head>
 <body>
 <div class="bar">
-  <span>docs/architecture.html — the real wiring, traced from source (file:line on every box)</span>
+  <span>docs/architecture.html — the real wiring, traced from source (file + symbol on every box)</span>
   <button id="exportBtn">Export as PNG</button>
 </div>
 <div class="wrap">
@@ -71,7 +71,7 @@
 
 <!-- ======================= header ======================= -->
 <text class="sans title" x="24" y="28">trust-issues — the real wiring</text>
-<text class="sans sub end" x="1336" y="28">training_flow.py re-traced 2026-07-11 (explain wired) · src file:line unchanged · no box from memory</text>
+<text class="sans sub end" x="1336" y="28">re-traced 2026-07-11 — Phase 2: model_io.py split from train.py · labels cite symbols, not line numbers · no box from memory</text>
 
 <!-- ======================= legend ======================= -->
 <rect class="cont" x="16" y="40" width="1328" height="68" rx="8"/>
@@ -92,41 +92,41 @@
 <text class="sans lg grey" x="450" y="98">code-reuse import — not an invocation</text>
 <rect class="orph" x="740" y="85" width="26" height="17" rx="3"/>
 <text class="sans lg grey" x="776" y="98">not wired into the flow (orphan)</text>
-<text class="m95 wht" x="1074" y="98">file:line</text>
-<text class="sans lg grey" x="1136" y="98">= verified in source at that line</text>
+<text class="m95 wht" x="1074" y="98">symbol()</text>
+<text class="sans lg grey" x="1136" y="98">= verified in source under that name</text>
 
 <!-- ======================= entry point ======================= -->
 <text class="m10" x="24" y="128">$ uv run python pipelines/training_flow.py run</text>
-<text class="m85" x="340" y="128">README.md:28 · :137 — __main__ guard training_flow.py:540</text>
+<text class="m85" x="340" y="128">README.md intro · Setup — __main__ guard, training_flow.py</text>
 <line class="ef" x1="40" y1="133" x2="40" y2="146" marker-end="url(#mg)"/>
 
 <!-- ======================= flow container ======================= -->
 <rect class="cont" x="16" y="150" width="1328" height="440" rx="8"/>
-<text class="bt" x="28" y="170">pipelines/training_flow.py — TrainingFlow(FlowSpec)  (:286)</text>
+<text class="bt" x="28" y="170">pipelines/training_flow.py — TrainingFlow(FlowSpec)</text>
 <text class="sans sub" x="470" y="170">linear: start → train → calibrate → evaluate → fairness → explain → end · each step runs in its own subprocess; state crosses via the .metaflow/ datastore</text>
 
 <!-- @start (XML: no double hyphen inside comments, or serialization breaks PNG export) -->
 <rect class="scont" x="32" y="184" width="1296" height="234" rx="6"/>
-<text class="bt" x="44" y="204">@start  (:300–:372)</text>
+<text class="bt" x="44" y="204">@start</text>
 <text class="sans sub" x="210" y="204">load → validate → prove-no-leakage → split</text>
 
 <!-- csv box -->
 <rect class="box" x="44" y="228" width="140" height="48" rx="5"/>
-<text class="m9 mid wht" x="114" y="241">data/LC_loans_</text>
-<text class="m9 mid wht" x="114" y="252">granting_model_</text>
-<text class="m9 mid wht" x="114" y="263">dataset.csv</text>
-<text class="m8 mid" x="114" y="273">(data_loader.py:35)</text>
+<text class="m9 mid wht" x="114" y="241">data/LC_loans_granting_</text>
+<text class="m9 mid wht" x="114" y="252">model_dataset.csv</text>
+<text class="m8 mid" x="114" y="263">(data_loader.py</text>
+<text class="m8 mid" x="114" y="273">DEFAULT_DATA_PATH)</text>
 
 <line class="ef" x1="184" y1="252" x2="245" y2="252" marker-end="url(#mg)"/>
-<text class="m85 mid" x="215" y="245">load_raw() :220</text>
+<text class="m85 mid" x="215" y="245">load_raw()</text>
 
 <!-- gate: validation -->
 <path class="gr" d="M265,228 L283,252 L265,276 L247,252 Z"/>
 <text class="m10 mid halt" x="265" y="256.5">✕</text>
 <text class="m95 mid wht" x="265" y="292">validate_loan_data</text>
-<text class="m85 mid" x="265" y="304">load_raw → data_loader.py:117</text>
+<text class="m85 mid" x="265" y="304">from load_raw() (data_loader.py)</text>
 <text class="m85 mid halt" x="265" y="316">✕ SchemaErrors — HALT</text>
-<text class="m85 mid" x="265" y="328">(data_validation.py:191, pandera)</text>
+<text class="m85 mid" x="265" y="328">(data_validation.py, pandera)</text>
 
 <line class="ef" x1="283" y1="252" x2="435" y2="252" marker-end="url(#mg)"/>
 
@@ -134,8 +134,8 @@
 <path class="gr" d="M455,228 L473,252 L455,276 L437,252 Z"/>
 <text class="m10 mid halt" x="455" y="256.5">✕</text>
 <text class="m95 mid wht" x="455" y="292">check_forbidden_features</text>
-<text class="m85 mid" x="455" y="304">flow :320 → leakage_check.py:70</text>
-<text class="m85 mid halt" x="455" y="316">✕ ValueError :110 — HALT</text>
+<text class="m85 mid" x="455" y="304">@start → leakage_check.py</text>
+<text class="m85 mid halt" x="455" y="316">✕ ValueError — HALT</text>
 
 <line class="ef" x1="473" y1="252" x2="625" y2="252" marker-end="url(#mg)"/>
 
@@ -143,8 +143,8 @@
 <path class="gr" d="M645,228 L663,252 L645,276 L627,252 Z"/>
 <text class="m10 mid halt" x="645" y="256.5">✕</text>
 <text class="m95 mid wht" x="645" y="292">prove_forbidden_absent</text>
-<text class="m85 mid" x="645" y="304">flow :321 → leakage_check.py:118</text>
-<text class="m85 mid halt" x="645" y="316">✕ ValueError :168 — HALT</text>
+<text class="m85 mid" x="645" y="304">@start → leakage_check.py</text>
+<text class="m85 mid halt" x="645" y="316">✕ ValueError — HALT</text>
 
 <line class="ef" x1="663" y1="252" x2="815" y2="252" marker-end="url(#mg)"/>
 
@@ -152,17 +152,17 @@
 <path class="gb" d="M835,228 L853,252 L835,276 L817,252 Z"/>
 <text class="m10 mid rep" x="835" y="256.5">!</text>
 <text class="m95 mid wht" x="835" y="292">check_temporal_consistency</text>
-<text class="m85 mid" x="835" y="304">flow :334 → leakage_check.py:176</text>
-<text class="m85 mid rep" x="835" y="316">! SKIP — no date columns (:351)</text>
-<text class="m8 mid halt" x="835" y="328">self-arms → ✕ raise :339 on any date col</text>
+<text class="m85 mid" x="835" y="304">@start → leakage_check.py</text>
+<text class="m85 mid rep" x="835" y="316">! SKIP — no date columns</text>
+<text class="m8 mid halt" x="835" y="328">self-arms → ✕ raise on any date col</text>
 
 <line class="ef" x1="853" y1="252" x2="918" y2="252" marker-end="url(#mg)"/>
 
 <!-- temporal_split -->
 <rect class="box" x="920" y="228" width="170" height="48" rx="5"/>
 <text class="m10 mid" x="1005" y="243">temporal_split()</text>
-<text class="m9 mid" x="1005" y="256">→ self.splits  (:358)</text>
-<text class="m9 mid" x="1005" y="269">data_loader.py:122</text>
+<text class="m9 mid" x="1005" y="256">→ self.splits</text>
+<text class="m9 mid" x="1005" y="269">data_loader.py</text>
 <line class="ef" x1="1005" y1="276" x2="1005" y2="344" marker-end="url(#mg)"/>
 
 <line class="ef" x1="1090" y1="252" x2="1140" y2="252" marker-end="url(#mg)"/>
@@ -171,13 +171,13 @@
 <path class="gr" d="M1160,228 L1178,252 L1160,276 L1142,252 Z"/>
 <text class="m10 mid halt" x="1160" y="256.5">✕</text>
 <text class="m95 mid wht" x="1160" y="292">check_single_feature_auc</text>
-<text class="m85 mid" x="1160" y="304">flow :367 → leakage_check.py:321</text>
-<text class="m85 mid halt" x="1160" y="316">AUC &gt; 0.90 ⇒ ✕ ValueError :364 — HALT</text>
+<text class="m85 mid" x="1160" y="304">@start → leakage_check.py</text>
+<text class="m85 mid halt" x="1160" y="316">AUC &gt; 0.90 ⇒ ✕ ValueError — HALT</text>
 <text class="m85 mid" x="1160" y="328">(on the engineered train split)</text>
 
 <!-- exit @start → @train -->
 <path class="ef" d="M1178,252 L1290,252 L1290,432 L160,432 L160,446" marker-end="url(#mg)"/>
-<text class="m85 mid" x="725" y="426">self.next(self.train)  (:372)  ·  self.splits pickled between step subprocesses via the .metaflow/ datastore  (:292)</text>
+<text class="m85 mid" x="725" y="426">self.next(self.train)  ·  self.splits pickled between step subprocesses via the .metaflow/ datastore</text>
 
 <!-- splits strip -->
 <rect class="strip" x="40" y="348" width="200" height="44" rx="4"/>
@@ -195,66 +195,66 @@
 <rect class="strip" x="872" y="348" width="200" height="44" rx="4"/>
 <text class="m95 mid wht" x="972" y="365">holdout_2018 · 2018</text>
 <text class="m9 mid" x="972" y="379">n≈56,160 · dr≈0.1575</text>
-<text class="m85" x="40" y="410">years: data_loader.py:42–45 · N_VAL=40,000 :49 · seed 42 :37 · shuffle+slice :152–:157 · counts from :144–:149 (“approximately”) · 2018 kept out of Test — suspected right-censoring (:129–:132)</text>
+<text class="m85" x="40" y="410">splits: data_loader.py (TRAIN_YEAR_LO/HI, TEST_YEAR_LO/HI, VAL_CALIB_YEAR, HOLDOUT_YEAR_2018, RANDOM_SEED=42, N_VAL=40,000) · shuffle+slice: temporal_split() · counts (“approximately”) + 2018 suspected-right-censoring rationale: its docstring</text>
 
 <!-- steps row -->
 <rect class="box" x="40" y="450" width="240" height="120" rx="6"/>
-<text class="bt" x="52" y="468">@train  (:375)</text>
-<text class="m9" x="52" y="484">train_and_save() → src/train.py:371</text>
-<text class="m9" x="52" y="497">LR baseline + production LightGBM</text>
-<text class="m9" x="52" y="510">MLflow: lr_baseline run (train.py:408)</text>
-<text class="m9" x="52" y="523">+ lgbm_production run (train.py:427)</text>
-<text class="m9" x="52" y="536">prod run re-found by recency (:384)</text>
-<text class="m9" x="52" y="549">writes models/lgbm_model.pkl</text>
-<text class="m9" x="52" y="562">(train.py:483 · copied to MLflow :490)</text>
+<text class="bt" x="52" y="468">@train</text>
+<text class="m9" x="52" y="484">train_and_save() → src/train.py</text>
+<text class="m9" x="52" y="497">LR baseline + production LightGBM —</text>
+<text class="m9" x="52" y="510">delegates to model_io.py's</text>
+<text class="m9" x="52" y="523">train_baseline() / train_lgb()</text>
+<text class="m9" x="52" y="536">MLflow: lr_baseline + lgbm_production</text>
+<text class="m9" x="52" y="549">prod run re-found by recency</text>
+<text class="m9" x="52" y="562">writes models/lgbm_model.pkl · MLflow copy</text>
 
 <line class="ef" x1="280" y1="510" x2="298" y2="510" marker-end="url(#mg)"/>
 
 <rect class="box" x="300" y="450" width="240" height="120" rx="6"/>
-<text class="bt" x="312" y="468">@calibrate  (:390)</text>
-<text class="m9" x="312" y="484">calibrate_model() → src/calibrate.py:99</text>
+<text class="bt" x="312" y="468">@calibrate</text>
+<text class="m9" x="312" y="484">calibrate_model() → src/calibrate.py</text>
 <text class="m9" x="312" y="497">isotonic fit on Calib, scored on Test</text>
-<text class="m9" x="312" y="510">(calibrate.py:171–:181)</text>
+<text class="m9" x="312" y="510">(inside calibrate_model())</text>
 <text class="m9" x="312" y="523">writes models/isotonic_calibrator.pkl</text>
-<text class="m9" x="312" y="536">(calibrate.py:239)</text>
-<text class="m9" x="312" y="549">appends 7 metrics → prod run (:397)</text>
+<text class="m9" x="312" y="536">(joblib.dump in calibrate_model())</text>
+<text class="m9" x="312" y="549">appends 7 metrics → prod run</text>
 
 <line class="ef" x1="540" y1="510" x2="558" y2="510" marker-end="url(#mg)"/>
 
 <rect class="box" x="560" y="450" width="240" height="120" rx="6"/>
-<text class="bt" x="572" y="468">@evaluate  (:401)</text>
-<text class="m9" x="572" y="484">run_evaluation() → src/evaluate.py:386</text>
-<text class="m9" x="572" y="497">select_threshold on Val (evaluate.py:305)</text>
+<text class="bt" x="572" y="468">@evaluate</text>
+<text class="m9" x="572" y="484">run_evaluation() → src/evaluate.py</text>
+<text class="m9" x="572" y="497">select_threshold() on Val (evaluate.py)</text>
 <text class="m9" x="572" y="510">evaluate_at_threshold on Test — once</text>
-<text class="m9" x="572" y="523">appends 7 profit metrics (:408)</text>
+<text class="m9" x="572" y="523">appends 7 profit metrics</text>
 
 <line class="ef" x1="800" y1="510" x2="818" y2="510" marker-end="url(#mg)"/>
 
 <rect class="box" x="820" y="450" width="240" height="120" rx="6"/>
-<text class="bt" x="832" y="468">@fairness  (:412)</text>
-<text class="m9" x="832" y="484">run_fairness_audit() → src/fairness.py:494</text>
-<text class="m9" x="832" y="497">at evaluate's best_threshold (:429)</text>
-<text class="m9" x="832" y="510">Layer 3 ablation retrains 2 models (:375)</text>
+<text class="bt" x="832" y="468">@fairness</text>
+<text class="m9" x="832" y="484">run_fairness_audit() → src/fairness.py</text>
+<text class="m9" x="832" y="497">at evaluate's best_threshold</text>
+<text class="m9" x="832" y="510">audit_layer3_ablation() retrains 2 models</text>
 <text class="m9 grey" x="832" y="523">⊘ shipped calibrator NEVER loaded here —</text>
-<text class="m9 grey" x="832" y="536">refits isotonic (fairness.py:586–:587)</text>
-<text class="m9" x="832" y="549">appends 4 metrics + threshold (:434–:437)</text>
+<text class="m9 grey" x="832" y="536">refits isotonic (run_fairness_audit())</text>
+<text class="m9" x="832" y="549">appends 4 metrics + threshold</text>
 
 <line class="ef" x1="1060" y1="510" x2="1078" y2="510" marker-end="url(#mg)"/>
 
-<!-- @explain: wired in :438 between fairness and end; reporting (blue), fail-open -->
+<!-- @explain: wired between fairness and end; reporting (blue), fail-open -->
 <rect class="box" x="1080" y="450" width="240" height="90" rx="6"/>
-<text class="bt" x="1092" y="465">@explain  (:441)</text>
-<text class="m9" x="1092" y="478">guarded_importance (:265) wraps</text>
-<text class="m9" x="1092" y="489">global_importance() → explain.py:614</text>
+<text class="bt" x="1092" y="465">@explain</text>
+<text class="m9" x="1092" y="478">guarded_importance() wraps</text>
+<text class="m9" x="1092" y="489">global_importance() → src/explain.py</text>
 <text class="m9" x="1092" y="500">logs 8 shap_importance_* + 3 params</text>
-<text class="m9" x="1092" y="511">→ lgbm_production run (:494–:495)</text>
-<text class="m9 rep" x="1092" y="522">! fail-open: SKIP Import/Mem/OSError (:262)</text>
+<text class="m9" x="1092" y="511">→ lgbm_production run</text>
+<text class="m9 rep" x="1092" y="522">! fail-open: SKIP _EXPLAIN_SKIP_ERRORS</text>
 <text class="m9 halt" x="1092" y="533">✕ else (additivity ValueError) → HALT</text>
 
 <line class="ef" x1="1200" y1="540" x2="1200" y2="551" marker-end="url(#mg)"/>
 
 <rect class="box" x="1080" y="552" width="240" height="20" rx="6"/>
-<text class="m9" x="1092" y="565">@end  (:508) — console summary, no writes</text>
+<text class="m9" x="1092" y="565">@end — console summary, no writes</text>
 
 <!-- ======================= MLflow bus (blue, reporting) ======================= -->
 <line class="eb" x1="120" y1="570" x2="120" y2="612"/>
@@ -265,13 +265,13 @@
 <path class="eb" d="M1088,540 L1088,545 L1070,545 L1070,612"/>
 <line class="eb" x1="120" y1="612" x2="1185" y2="612"/>
 <line class="eb" x1="1185" y1="612" x2="1185" y2="668" marker-end="url(#mb)"/>
-<text class="m9 mid rep" x="640" y="602">reporting only — log_metrics_to_run (training_flow.py:101) appends onto the lgbm_production run</text>
+<text class="m9 mid rep" x="640" y="602">reporting only — log_metrics_to_run() (training_flow.py) appends onto the lgbm_production run</text>
 
 <!-- ======================= writes (grey) ======================= -->
 <line class="ef" x1="240" y1="570" x2="240" y2="668" marker-end="url(#mg)"/>
-<text class="m85 end" x="234" y="666">writes (train.py:483)</text>
+<text class="m85 end" x="234" y="666">writes (train_and_save())</text>
 <line class="ef" x1="535" y1="570" x2="535" y2="668" marker-end="url(#mg)"/>
-<text class="m85" x="543" y="666">writes (calibrate.py:239)</text>
+<text class="m85" x="543" y="666">writes (calibrate_model())</text>
 
 <!-- ======================= contract buses (red, fail-closed) ======================= -->
 <!-- model.pkl → upward consumers -->
@@ -280,52 +280,52 @@
 <line class="eh" x1="440" y1="630" x2="440" y2="574" marker-end="url(#mr)"/>
 <line class="eh" x1="660" y1="630" x2="660" y2="574" marker-end="url(#mr)"/>
 <line class="eh" x1="960" y1="630" x2="960" y2="574" marker-end="url(#mr)"/>
-<text class="m85 mid halt" x="440" y="643">calibrate.py:162</text>
-<text class="m85 mid halt" x="660" y="643">evaluate.py:247</text>
-<text class="m85 mid halt" x="960" y="643">fairness.py:573</text>
+<text class="m85 mid halt" x="440" y="643">calibrate_model()</text>
+<text class="m85 mid halt" x="660" y="643">_predict_calibrated()</text>
+<text class="m85 mid halt" x="960" y="643">run_fairness_audit()</text>
 <!-- calibrator.pkl → upward consumer -->
 <line class="eh" x1="710" y1="672" x2="710" y2="654"/>
 <line class="eh" x1="710" y1="654" x2="740" y2="654"/>
 <line class="eh" x1="740" y1="654" x2="740" y2="574" marker-end="url(#mr)"/>
-<text class="m85 halt" x="750" y="658">evaluate.py:253</text>
+<text class="m85 halt" x="750" y="658">_predict_calibrated()</text>
 
 <!-- ======================= artifacts ======================= -->
 <rect class="art" x="130" y="672" width="360" height="96" rx="6"/>
 <text class="bt" x="142" y="690">models/lgbm_model.pkl</text>
 <text class="m9" x="142" y="704">dict: booster + FEATURES + CATEGORICAL</text>
 <text class="m9" x="142" y="717">+ category_maps + best_iteration + trained_at</text>
-<text class="m9" x="142" y="730">(train.py:472–:483)</text>
+<text class="m9" x="142" y="730">(built in train_and_save())</text>
 <text class="m9 halt" x="142" y="746">loaded ONLY via load_model_artifact() —</text>
-<text class="m9 halt" x="142" y="759">✕ raises on feature-contract mismatch (train.py:495)</text>
+<text class="m9 halt" x="142" y="759">✕ raises on feature-contract mismatch (model_io.py)</text>
 
 <rect class="art" x="530" y="672" width="360" height="96" rx="6"/>
 <text class="bt" x="542" y="690">models/isotonic_calibrator.pkl</text>
 <text class="m9" x="542" y="704">dict: calibrator + model_path + model_trained_at</text>
-<text class="m9" x="542" y="717">(calibrate.py:229–:239)</text>
+<text class="m9" x="542" y="717">(built in calibrate_model())</text>
 <text class="m9 halt" x="542" y="746">loaded via load_calibrator(model_artifact=…) —</text>
-<text class="m9 halt" x="542" y="759">✕ raises on stale trained_at (calibrate.py:56, :88)</text>
+<text class="m9 halt" x="542" y="759">✕ raises on stale trained_at (load_calibrator())</text>
 
 <rect class="art" x="1040" y="672" width="290" height="96" rx="6"/>
 <text class="bt" x="1052" y="690">mlflow.db  (sqlite)</text>
-<text class="m9" x="1052" y="704">URI pinned: training_flow.py:59 · train.py:84</text>
+<text class="m9" x="1052" y="704">URI pinned: training_flow TRACKING_URI · train.py</text>
 <text class="m9" x="1052" y="717">runs: lr_baseline · lgbm_production</text>
 <text class="m9" x="1052" y="730">(+ calibrate / evaluate / fairness appends)</text>
-<text class="m9 rep" x="1052" y="746">drift_check — its own run (:549–:551),</text>
-<text class="m9 rep" x="1052" y="759">never appended onto lgbm_production (:43–:45)</text>
+<text class="m9 rep" x="1052" y="746">drift_check — its own run (run_drift_check()),</text>
+<text class="m9 rep" x="1052" y="759">never appended onto lgbm_production (docstring)</text>
 
 <!-- ======================= orphan container (painted FIRST so edges land on top) ======================= -->
-<!-- shrunk to wrap only drift_check: explain.py is no longer an orphan (wired as @explain :441) -->
+<!-- shrunk to wrap only drift_check: explain.py is no longer an orphan (wired as @explain) -->
 <rect class="orph" x="16" y="800" width="672" height="232" rx="8"/>
 
 <!-- ======================= contracts down to orphans (red) ======================= -->
 <line class="eh" x1="250" y1="768" x2="250" y2="826" marker-end="url(#mr)"/>
-<text class="m85 halt" x="258" y="812">model.pkl → :529</text>
+<text class="m85 halt" x="258" y="812">model.pkl → run_drift_check()</text>
 <line class="eh" x1="600" y1="768" x2="600" y2="826" marker-end="url(#mr)"/>
-<text class="m85 halt end" x="592" y="812">calibrator.pkl → :530</text>
+<text class="m85 halt end" x="592" y="812">calibrator.pkl → run_drift_check()</text>
 
 <!-- drift_check → mlflow (blue) -->
 <path class="eb" d="M648,830 L648,816 L1250,816 L1250,772" marker-end="url(#mb)"/>
-<text class="m85 mid rep" x="898" y="808">drift's own MLflow run (:549–:551)</text>
+<text class="m85 mid rep" x="898" y="808">drift's own MLflow run (run_drift_check())</text>
 
 <!-- drift_check imports helpers from training_flow (dashed grey) -->
 <line class="eo" x1="105" y1="830" x2="105" y2="594" marker-end="url(#mo)"/>
@@ -334,18 +334,18 @@
 <rect class="orph" x="40" y="830" width="620" height="170" rx="6"/>
 <text class="bt" x="52" y="850">pipelines/drift_check.py</text>
 <text class="m85 grey ital end" x="648" y="850">not wired into the flow</text>
-<text class="m95 wht" x="52" y="868">$ uv run python pipelines/drift_check.py      README.md:138 · __main__ :563</text>
-<text class="m9" x="52" y="882">separate MANUAL entry point — run_drift_check() (:458); nothing schedules it</text>
-<text class="m9" x="52" y="896">signals: PSI · KS · sentinel_rate · tripwire (100,1000] · calib_gap — dti_n per issue_year (:14–:34)</text>
-<text class="m9 rep" x="52" y="910">REPORTS, does NOT raise — fail_on_alarm=False by default (:468, :494–:497); alarms are the product</text>
-<text class="m9" x="52" y="924">scores every year with the SHIPPED artifacts — loads both, contract-checked (:529–:530); never refits</text>
-<text class="m9 rep" x="52" y="938">logs to its own MLflow run 'drift_check' (:100, :549–:551) — never onto lgbm_production (:43–:45)</text>
-<text class="m85 grey" x="52" y="952">⇡ dashed edge: imports configure_mlflow + log_metrics_to_run from training_flow.py (:76) — code reuse, not invocation</text>
+<text class="m95 wht" x="52" y="868">$ uv run python pipelines/drift_check.py      README.md Setup · __main__ guard</text>
+<text class="m9" x="52" y="882">separate MANUAL entry point — run_drift_check(); nothing schedules it</text>
+<text class="m9" x="52" y="896">signals: PSI · KS · sentinel_rate · tripwire (100,1000] · calib_gap — dti_n per issue_year (module docstring)</text>
+<text class="m9 rep" x="52" y="910">REPORTS, does NOT raise — fail_on_alarm=False default in run_drift_check(); alarms are the product</text>
+<text class="m9" x="52" y="924">scores every year with the SHIPPED artifacts — loads both, contract-checked (run_drift_check()); never refits</text>
+<text class="m9 rep" x="52" y="938">logs to its own MLflow run 'drift_check' (MLFLOW_RUN_NAME) — never onto lgbm_production (docstring)</text>
+<text class="m85 grey" x="52" y="952">⇡ dashed edge: imports configure_mlflow() + log_metrics_to_run() from training_flow.py — code reuse, not invocation</text>
 
 <text class="sans sub grey" x="28" y="1022" style="font-weight:700">NOT WIRED INTO THE FLOW — a manual entry point; nothing (no CI, cron, or scheduler) invokes it automatically</text>
 
 <!-- ======================= footer ======================= -->
-<text class="m85" x="24" y="1058">sources read for this diagram: pipelines/training_flow.py · pipelines/drift_check.py · src/{data_loader, data_validation, leakage_check, train, calibrate, evaluate, fairness, explain}.py · README.md — training_flow.py re-traced 2026-07-11 (explain wired); src file:line unchanged since the 2026-07-09 trace at HEAD b84dc97</text>
+<text class="m85" x="24" y="1058">sources read: pipelines/training_flow.py · pipelines/drift_check.py · src/{data_loader, data_validation, leakage_check, train, model_io, calibrate, evaluate, fairness, explain}.py · README.md — re-traced 2026-07-11 (Phase 2 split); labels cite symbols</text>
 </svg>
 </div>
 

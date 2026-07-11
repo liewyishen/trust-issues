@@ -41,7 +41,7 @@ threshold choice can turn a structurally unprofitable loan book profitable.
 This module's value is LOSS MINIMIZATION, not profit generation. See
 run_evaluation()'s docstring for the real numbers.
 
-Reuses train.py's _xy/_to_lgb_frame for encoding and calibrate.py's
+Reuses model_io.py's _xy/_to_lgb_frame for encoding and calibrate.py's
 apply_calibration/load_calibrator for calibration -- a second,
 independently written encoding or calibration path here would drift from
 what the shipped model/calibrator were actually fit against (the same

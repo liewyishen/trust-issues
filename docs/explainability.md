@@ -5,7 +5,8 @@ This is a record of what was measured, not a design. No solution is proposed
 or chosen here; the open questions at the end are left open on purpose.
 
 **Provenance.** Every empirical claim below is tagged with one of:
-- `file:line` -- read directly from source.
+- `file.py` + symbol name -- read directly from source (`analysis.ipynb:line`
+  citations keep the line form; the notebook is a frozen artifact).
 - *computed from `models/isotonic_calibrator.pkl`* -- obtained by loading the
   artifact and reading `X_thresholds_` / `y_thresholds_`. No model was run and
   no split was loaded.

@@ -34,15 +34,15 @@ trust beats a 0.99 you can't.**
 
 ![Architecture](docs/architecture.png)
 
-*[Interactive version](docs/architecture.html) — every label states the file:line it was verified
-at; the page's Export-as-PNG button regenerates the image above.*
+*[Interactive version](docs/architecture.html) — every label cites the symbol (function, constant,
+or step) it was verified under; the page's Export-as-PNG button regenerates the image above.*
 
 Colour carries meaning and nothing else: red is a gate that raises and halts the run, blue is
 reporting that can halt nothing, grey dashed is code not wired into the flow.
 `pipelines/drift_check.py` sits outside the pipeline — a separate manual entry point — and is drawn
 that way rather than connected. (`src/explain.py` was an orphan here too; the `explain` step now
-wires it in as a blue reporting node after fairness, so the image above — traced 2026-07-09 — is
-stale on that one point and is being regenerated.) No calibrator edge runs to the fairness step —
+wires it in as a blue reporting node after fairness, and the image above — re-traced 2026-07-11
+after the Phase 2 `train.py`→`model_io.py` split — draws it in the flow.) No calibrator edge runs to the fairness step —
 `run_fairness_audit()` never loads the shipped calibrator, it refits its own isotonic inside that
 same function — so drawing that edge would be a lie.
 

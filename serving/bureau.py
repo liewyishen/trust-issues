@@ -1,13 +1,17 @@
 """
 The credit-bureau data contract, and a deterministic mock implementation.
 
-This is the data layer only. Nothing in this module is wired into scoring:
-serving/schema.py's ScoreRequest, serving/app.py's /score handler, and
-src/explain.py's explain_applicants() are all untouched by this module and do
-not import from it. `fico_n` and `dti_n` are self-reported by the applicant
-today (ScoreRequest); this module exists so a future step can replace those
-two fields' SOURCE with a bureau pull, without yet deciding when or how that
-replacement happens. That wiring is deliberately out of scope here.
+This module is now wired into scoring: serving/app.py imports it, keeps a
+CreditBureau on app.state (lifespan constructs MockBureau; create_app()
+accepts an injected one; get_bureau() resolves it per request), and the
+/score handler calls bureau.fetch(applicant_id) before scoring. `fico_n` is
+bureau-sourced -- ScoreRequest no longer carries the field, and ScoreResponse
+reports the pull's provenance (bureau, fico_version,
+credit_report_pulled_at). `dti_n` stays applicant-reported this round:
+report.dti_n is fetched but deliberately unused (see docs/data-decisions.md's
+"Phase 1 bureau wiring" entry). src/explain.py's explain_applicants() remains
+untouched -- app.py's _to_raw_frame() hands it the same seven-field raw frame
+as before, now assembled from two sources.
 
 Two things this module refuses to do, on purpose:
 
@@ -25,9 +29,10 @@ Two things this module refuses to do, on purpose:
   - It does not invent new numeric constants for fields the shipped model
     already constrains. fico_n's and dti_n's bounds are imported from
     src/data_validation.py (FICO_MIN, FICO_MAX, DTI_MAX_REAL, DTI_SENTINEL) --
-    the same constants ScoreRequest already binds to (serving/schema.py) --
-    so a bureau-supplied score and a self-reported score are held to the
-    identical domain contract. Fields with no existing analog in this repo
+    the constants ScoreRequest bound fico_n to before Phase 1 moved the field
+    here, and still binds dti_n to (serving/schema.py) -- so a bureau-supplied
+    value and an applicant-reported one are held to the identical domain
+    contract. Fields with no existing analog in this repo
     (inquiry_window_days, and the mock's synthetic pulled_at) are called out
     below as new to this module, since rule 4 of this task requires that.
 
@@ -93,13 +98,14 @@ class CreditReport(BaseModel):
           calibrator_trained_at for provenance rather than silently trusting
           "the currently loaded artifact."
 
-      (b) Credit data fields -- the values a future scoring path would read.
-          Today only fico_n and dti_n are modeled, because those are the only
-          two credit-bureau-shaped fields the shipped 8-feature model actually
+      (b) Credit data fields -- the values the scoring path reads from a
+          pull. /score consumes fico_n today; dti_n is modeled but stays
+          applicant-reported this round. These are the only two
+          credit-bureau-shaped fields the shipped 8-feature model actually
           consumes (src/features.py's NUMERIC). Their bounds are imported from
           src/data_validation.py, not redeclared, so a bureau-supplied value
-          and a self-reported ScoreRequest value are held to the identical
-          domain contract.
+          and an applicant-reported ScoreRequest value (dti_n today) are held
+          to the identical domain contract.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -114,11 +120,11 @@ class CreditReport(BaseModel):
     # so gt=0 is basic domain sanity, not a borrowed business threshold.
     inquiry_window_days: int = Field(gt=0)
 
-    # --- (b) Credit data fields -- future model inputs -----------------------
-    # Mirrors ScoreRequest.fico_n's bound exactly (serving/schema.py:121):
-    # same imported FICO_MIN/FICO_MAX, same strict float. This is the field
-    # Phase 1 is expected to eventually re-source from here instead of from
-    # applicant self-report.
+    # --- (b) Credit data fields -- model inputs (fico_n live today) ---------
+    # The bound ScoreRequest.fico_n carried before Phase 1 moved the field
+    # here: same imported FICO_MIN/FICO_MAX, same strict float. /score now
+    # reads fico_n from this report; ScoreRequest no longer accepts the field
+    # at all (serving/schema.py, extra="forbid").
     fico_n: float = Field(strict=True, ge=FICO_MIN, le=FICO_MAX)
 
     # Bureau-supplied, not computed here -- see the module docstring. Passed
@@ -131,13 +137,12 @@ class CreditReport(BaseModel):
     def _dti_in_band_or_sentinel(cls, v: float) -> float:
         """
         The same band-or-sentinel logic as ScoreRequest._dti_in_band_or_sentinel
-        (serving/schema.py:126-143), reproduced here rather than imported,
-        because it is a bound method of a pydantic model class in a file this
-        task's rules forbid touching this round. Both validators are built
-        from the same imported DTI_MAX_REAL / DTI_SENTINEL constants, so they
-        cannot silently drift apart on WHAT the bound is, only potentially on
-        wording -- worth consolidating into a shared validator in a future
-        round once serving/schema.py is back in scope.
+        (serving/schema.py), duplicated rather than imported (a Phase 1
+        constraint -- schema.py was out of scope the round this module was
+        created). Both validators are built from the same imported
+        DTI_MAX_REAL / DTI_SENTINEL constants, so they cannot silently drift
+        apart on WHAT the bound is, only potentially on wording -- worth
+        consolidating into a shared validator in a future round.
         """
         if (0.0 <= v <= DTI_MAX_REAL) or v == DTI_SENTINEL:
             return v
@@ -150,7 +155,7 @@ class CreditReport(BaseModel):
 @runtime_checkable
 class CreditBureau(Protocol):
     """
-    What a future scoring path depends on: this interface, not a concrete
+    What the /score path depends on: this interface, not a concrete
     vendor SDK. MockBureau is the only implementation today; a real
     Equifax/Experian/TransUnion client would implement this same method and
     be swappable without touching any caller.

@@ -76,7 +76,7 @@ decision is made on.
 
 `shap.TreeExplainer(model_ns)` is constructed without a `model_output`
 argument (`notebooks/analysis.ipynb:1675`), so for a LightGBM booster trained
-with `objective="binary"` (`src/train.py:94`) it attributes the model's **raw
+with `objective="binary"` (`src/model_io.py`'s `LGB_PARAMS`) it attributes the model's **raw
 log-odds margin**. The notebook says so in its own prose
 (`notebooks/analysis.ipynb:1633`) and prints the same caveat at runtime
 (`notebooks/analysis.ipynb:1760-1763`):
@@ -89,7 +89,7 @@ The decision, meanwhile, is made on the isotonic-calibrated probability. In
 the same notebook cell the probability is computed on a **separate path** that
 the SHAP values never touch: `p_shap_cal = iso_ns.transform(model_ns.predict(X_shap))`
 (`notebooks/analysis.ipynb:1773`). The production path is the same shape --
-`_predict_calibrated()` at `src/evaluate.py:219-258`.
+`_predict_calibrated()` in `src/evaluate.py`.
 
 Two transforms sit between the explained quantity and the decided quantity:
 
@@ -134,11 +134,11 @@ iso = IsotonicRegression(out_of_bounds="clip")
 iso.fit(p_calib_raw, y_calib)
 ```
 
-(`src/calibrate.py:179-180`). `y_min` and `y_max` are left at their `None`
+(inside `calibrate_model()`, `src/calibrate.py`). `y_min` and `y_max` are left at their `None`
 defaults; `increasing` is left at `True`. sklearn passes `y_min`/`y_max`
 straight through to `isotonic_regression()`, and `None` means no clipping. All
-five construction sites in the repo are identical: `src/calibrate.py:179`,
-`src/fairness.py:368`, `src/fairness.py:586`,
+five construction sites in the repo are identical: `src/calibrate.py`'s `calibrate_model()`,
+`src/fairness.py`'s `_train_ablation_variant()`, `src/fairness.py`'s `run_fairness_audit()`,
 `notebooks/analysis.ipynb:1119`, `notebooks/analysis.ipynb:1567`.
 
 `out_of_bounds="clip"` (overriding sklearn's `'nan'` default) makes both tails
@@ -146,15 +146,15 @@ constant: `p_raw <= 0.010907` maps to `0.0`, and `p_raw > 0.597072` maps to
 `0.558824`.
 
 **Sample count.** Fit on **40,000** rows. `N_VAL = 40_000`
-(`src/data_loader.py:49`); Val and Calib are disjoint positional slices of
-shuffled 2015 (`src/data_loader.py:156-157`); `calibrate_model()` fits on
-`splits["calib"]` (`src/calibrate.py:171`, `src/calibrate.py:180`).
+(`src/data_loader.py`); Val and Calib are disjoint positional slices of
+shuffled 2015 (`src/data_loader.py`'s `temporal_split()`); `calibrate_model()` fits on
+`splits["calib"]` (`src/calibrate.py`'s `calibrate_model()`).
 
 **The domain is `p_raw`, not log-odds.** This is the single most important
 structural fact in this document, and it is easy to get backwards.
 `calibrate_model()` fits on `model.predict(X_calib_lgb, num_iteration=...)`
-(`src/calibrate.py:176`, `src/calibrate.py:180`). With `objective="binary"`
-(`src/train.py:94`), `Booster.predict()` returns **probabilities**, not raw
+(`src/calibrate.py`'s `calibrate_model()`). With `objective="binary"`
+(`src/model_io.py`'s `LGB_PARAMS`), `Booster.predict()` returns **probabilities**, not raw
 scores -- its `raw_score` argument defaults to `False` and is never passed.
 
 The artifact confirms it: `X_min_ = 0.010907`, `X_max_ = 0.597072`. Those are
@@ -227,13 +227,13 @@ Block count also tracks signal strength, as the mechanism predicts. At
 | `y` drawn independently of `p` (no signal) | 11 |
 
 The shipped model's raw scores are compressed into `[0.010907, 0.597072]` and
-its test AUC is `0.6660` (`src/calibrate.py:125`). That is the "matches our
+its test AUC is `0.6660` (`calibrate_model()`'s docstring, `src/calibrate.py`). That is the "matches our
 domain" row. 52 blocks is what a weak ranker on 40,000 binary labels produces.
 
 **`Y_max = 0.558824` is a PAVA block mean, not a `y_max` clip.** Four
 independent lines of evidence:
 
-1. `y_max` is never passed (`src/calibrate.py:179`); it defaults to `None`,
+1. `y_max` is never passed (`calibrate_model()`, `src/calibrate.py`); it defaults to `None`,
    which disables clipping.
 2. `0.558824` equals `19 / 34` **bitwise**
    (`y_thresholds_[-1] == 19/34` evaluates to `True`; the value is
@@ -288,9 +288,9 @@ maps to `p_cal = 0.558824`. That is one output value for `0.503` of the unit
 interval in raw-score units.
 
 The 0.25 boundary is not special in this respect. Re-solving at the other
-thresholds present in the repo (`ABLATION_THRESHOLD = 0.22` at
-`src/fairness.py:115`; `DEFAULT_AUDIT_THRESHOLD = 0.26` at
-`src/fairness.py:107`) gives in-domain flat fractions of `99.35%` and
+thresholds present in the repo (`ABLATION_THRESHOLD = 0.22` in
+`src/fairness.py`; `DEFAULT_AUDIT_THRESHOLD = 0.26`, also in
+`src/fairness.py`) gives in-domain flat fractions of `99.35%` and
 `99.31%`. `0.25` and `0.26` in fact back-solve onto the *same ramp*
 (`p_raw* = 0.228948` and `0.228950`).
 
@@ -354,8 +354,8 @@ total; their calibrated ranking is a single tie. Ranks are **collapsed**,
 not preserved.
 
 This matters beyond attribution. It is also the mechanism behind the AUC
-change already documented at `src/calibrate.py:128-132` -- "isotonic's flat
-regions occasionally tying two examples that had different raw scores". That
+change already documented in `calibrate_model()`'s docstring (`src/calibrate.py`) --
+"isotonic's flat regions occasionally tying two examples that had different raw scores". That
 docstring describes the same phenomenon at a scale where it costs `0.0006`
 AUC. At the level of an individual explanation it is not a rounding effect;
 it is the whole story.
@@ -399,7 +399,7 @@ pending exactly that review, and this document does not change that status.
 ## 7. The trade-off we did not know we were making
 
 Isotonic regression was chosen on calibration quality. The real-run numbers
-recorded in `calibrate_model()`'s docstring (`src/calibrate.py:124-126`):
+recorded in `calibrate_model()`'s docstring (`src/calibrate.py`):
 
 ```
 Actual test default rate:      0.2323
@@ -409,7 +409,7 @@ Calibrated (isotonic):  Brier=0.1692  mean_pred=0.1915  AUC=0.6654
 
 Brier improves by `0.0025`. That was the whole basis for the choice, and the
 module is careful to say the improvement is a refinement rather than a rescue
-(`src/calibrate.py:17-23`): removing `scale_pos_weight` did roughly 90% of the
+(`src/calibrate.py`'s module docstring): removing `scale_pos_weight` did roughly 90% of the
 calibration work before isotonic ever ran.
 
 What was never written down is the **cost**: isotonic buys that Brier
@@ -449,7 +449,7 @@ worse. There is no cost to pay.
 *Provenance for this entire section: two throwaway scripts run outside the
 repository (`price_calibrators.py`, `refit_variance.py`), reading `src/` but
 changing nothing. `IsotonicRegression(out_of_bounds="clip")` per
-`src/calibrate.py:179`; Platt is `LogisticRegression(penalty=None)` on
+`calibrate_model()` (`src/calibrate.py`); Platt is `LogisticRegression(penalty=None)` on
 `logit(p_raw)`, which recovers the model's raw log-odds margin exactly since
 `p_raw = sigmoid(margin)`; beta calibration is `betacal==1.1.0` (Kull et al.'s
 reference implementation), installed into a scratch `--target` directory --
@@ -466,7 +466,7 @@ are genuinely fit on the same 40,000 calib rows and scored on the same rows.
 
 The LightGBM booster is trained on **2007-2014** and is **fixed** across every
 seed. Re-shuffling 2015 and re-cutting Val/Calib (mirroring
-`src/data_loader.py:152-157`) changes only *which 40,000 rows the calibrator is
+`src/data_loader.py`'s `temporal_split()`) changes only *which 40,000 rows the calibrator is
 fit on*. `splits["test"]` (2016-2017, n=462,174) and `splits["holdout_2018"]`
 (n=56,160) are **identical across all seeds**; raw scores were predicted once
 per split and reused.
@@ -493,7 +493,7 @@ answered here.
 
 **HOLDOUT_2018, n=56,160, actual default rate 0.1575** -- a genuinely different
 regime; this year is excluded from Test for suspected right-censoring
-(`src/data_loader.py:129-132`).
+(`src/data_loader.py`'s `temporal_split()` docstring).
 
 | Calibrator | mean Brier | sd | min | max | mean AUC |
 | --- | --- | --- | --- | --- | --- |
@@ -653,12 +653,13 @@ suggests, not less.** The option is free in Brier. It is not free in policy. A
 replacement calibrator is not a drop-in:
 
 - `best_threshold` would have to be **re-selected on Val** under the cost
-  objective (`select_threshold()`, `src/evaluate.py:261-315`), because the
+  objective (`select_threshold()`, `src/evaluate.py`), because the
   threshold that maximised expected profit under isotonic's mapping is not the
   one that maximises it under Platt's.
 - `test_profit`, `approval_rate`, and the naive-threshold comparison move with
   it (`evaluate_at_threshold()`), as does the fairness audit, which is run at
-  `audit_threshold=best_threshold` (`pipelines/training_flow.py:333-336`).
+  `audit_threshold=best_threshold` (`pipelines/training_flow.py`'s `TrainingFlow.fairness`
+  step).
 - Every number in `docs/data-decisions.md` that cites those quantities is
   downstream of the choice.
 
@@ -796,18 +797,19 @@ except the guard armed in `fix(explain): the additivity guard was inert -- arm i
 For a LightGBM booster constructed with no background data,
 `shap.TreeExplainer(booster).shap_values(X, tree_limit=L)` computes nothing of
 its own. `feature_perturbation="auto"` resolves to `"tree_path_dependent"`
-(`_tree.py:248`), which selects the fast path (`_tree.py:551-555`), whose entire
-body for this model type is:
+inside `TreeExplainer.__init__`, which selects the fast path inside
+`TreeExplainer.shap_values`, whose entire body for this model type is:
 
 ```python
-phi = self.model.original_model.predict(X, num_iteration=tree_limit, pred_contrib=True)   # :580
+phi = self.model.original_model.predict(X, num_iteration=tree_limit, pred_contrib=True)
 ...
-self.expected_value = phi[0, -1]    # :615
-out = phi[:, :-1]                   # :616
-return out                          # :622
+self.expected_value = phi[0, -1]
+out = phi[:, :-1]
+return out
 ```
 
-The contributions are LightGBM's. The `expected_value` attribute is a cached
+(all from shap's `TreeExplainer.shap_values`, in `shap/explainers/_tree.py`). The
+contributions are LightGBM's. The `expected_value` attribute is a cached
 copy of a column shap already held.
 
 **Bit-identical, measured:** 200 real Test rows x 8 features, `tree_limit =
@@ -826,31 +828,33 @@ is constant across rows (`ptp = 0.0`). Pinned by
 | `booster.predict(1 row, pred_contrib=True)` | 1.46 ms | 2.07 ms |
 
 `TreeExplainer.__init__` parses the booster into a `TreeEnsemble`
-(`_tree.py:279`) and precomputes an `expected_value` from `model.values`
-(`_tree.py:321-325`). The fast path reads neither: it overwrites
+and precomputes an `expected_value` from `model.values`
+(both still inside `TreeExplainer.__init__`). The fast path reads neither: it overwrites
 `expected_value` from `phi` and never touches the parsed arrays. The
 construction cost is real and its product is unused. `shap_values()` also emits
-a `UserWarning` on every call (`_tree.py:586-589`); `pred_contrib` emits none.
+a `UserWarning` on every call (also inside `TreeExplainer.shap_values`); `pred_contrib` emits none.
 
 ### `check_additivity` is inert here
 
 `shap_values(..., check_additivity=True)` verifies nothing for LightGBM.
 `model_output_vals` is assigned only inside the xgboost branch
-(`_tree.py:573-576`) and stays `None` otherwise (`_tree.py:556`), so the guard
+and stays `None` otherwise (both inside `TreeExplainer.shap_values`), so the guard
 
 ```python
-if check_additivity and model_output_vals is not None:   # _tree.py:618
+if check_additivity and model_output_vals is not None:
 ```
 
-is short-circuited on every call this repo makes. Demonstrated: a frame with
-`fico_n` set to all-NaN passes `check_additivity=True` without raising.
+(also inside `TreeExplainer.shap_values`) is short-circuited on every call this repo makes.
+Demonstrated: a frame with `fico_n` set to all-NaN passes `check_additivity=True` without
+raising.
 
 `src/explain.py` claimed in a comment that shap performed this check "for
 free". It never did. **Fixed** in commit `5705e10` -- `_assert_additivity()` now
 compares `base + contributions.sum(axis=1)` against
 `booster.predict(..., raw_score=True)` and raises past `ADDITIVITY_ATOL = 1e-9`
 (measured float64 noise: worst `7.77e-15` over 200 rows; shap's own tolerance,
-when it does run, is `atol=rtol=1e-2` at `_tree.py:845`). The guard runs on the
+when it does run, is `atol=rtol=1e-2` inside `TreeExplainer.assert_additivity`'s nested
+`check_sum`). The guard runs on the
 serving path, costs one extra predict (0.73-1.70 ms for a single row), and
 catches a `tree_limit` mismatch -- explain 240 trees, score 10 -- which was
 previously silent.
@@ -862,9 +866,9 @@ directly and slicing `phi[:, :-1]` / `phi[:, -1]` would remove **both** the
 ~65 ms construction and the shared-mutable-`expected_value` hazard: the base
 value would arrive inside each call's return value, so two concurrent requests
 could not cross-contaminate. Under a FastAPI service with a cached explainer,
-that hazard is a real silent-wrong-answer race -- request A's write at
-`_tree.py:615` can land between request B's call and B's read at
-`src/explain.py:219`, and no exception is raised.
+that hazard is a real silent-wrong-answer race -- request A's write inside
+`TreeExplainer.shap_values` can land between request B's call and B's read inside
+`src/explain.py`'s `_shap_matrix()`, and no exception is raised.
 
 The price is that three LightGBM output conventions, currently absorbed by shap,
 become ours to uphold:
@@ -874,7 +878,7 @@ become ours to uphold:
 2. **single-output-means-2D** -- true only because `objective="binary"` and
    `num_model_per_iteration() == 1`. A multiclass booster returns
    `(n, n_classes * (n_features + 1))`, and the naive slice would silently mix
-   classes. shap reshapes for this at `_tree.py:590-598`.
+   classes. shap reshapes for this inside `TreeExplainer.shap_values`.
 3. **`num_iteration=0` means all trees**, not none. Measured: `0`, `-1`, and
    `None` all return the full 240-tree contributions. A booster that ever saved
    `best_iteration = 0` would silently be explained in full.
@@ -883,8 +887,8 @@ It would also touch public API -- `explain_applicants(..., explainer=)`,
 `global_importance(..., explainer=)`, `_get_explainer()`, and the
 one-explainer amortization in `run_explanation()` all become dead -- and the
 stub-explainer tests in `tests/test_explain.py` lose their subject. `shap`
-would become droppable from `pyproject.toml`, since `src/explain.py:67` is the
-only `import shap` in the repo.
+would become droppable from `pyproject.toml`, since `src/explain.py`'s own
+`import shap` is the only one in the repo.
 
 **Deliberately not done.** Recorded, not decided. The equivalence is now pinned
 by a test, so whoever takes this on is making a decision rather than a leap.

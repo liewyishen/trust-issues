@@ -746,3 +746,66 @@ When a real bureau client is wired in, this is the first thing to add:
 upstream dependency failed" semantics -- distinct from the existing 503,
 which means "this service never finished loading," not "a call to another
 service failed"), and `/score` wraps `bureau.fetch()` accordingly.
+
+---
+
+## Phase 2: `src/train.py` split into `train.py` (MLflow) + `model_io.py` (everything else); serving image 2.64GB -> 937MB
+
+**Date:** 2026-07-11.
+
+**Context:** `serving/` (and `calibrate.py` / `evaluate.py` / `fairness.py` /
+`explain.py` / `pipelines/drift_check.py`) never called `train_and_save()`, the
+only function in `src/train.py` that actually touches MLflow -- but the module
+still imported `mlflow` and called `mlflow.set_tracking_uri(...)` at import
+time, so every one of those consumers pulled MLflow (and its transitive
+dependencies: pyarrow, sqlalchemy, botocore, cryptography, ...) into the
+serving image regardless.
+
+**Disposition:** `load_model_artifact`, `_x`, `_xy`, `_to_lgb_frame`,
+`_train_categories`, `_report_metrics`, `LGB_PARAMS`, `train_baseline`,
+`train_lgb`, `run_spw_ablation`, `PROJECT_ROOT`, `DEFAULT_MODEL_DIR` moved
+verbatim into a new `src/model_io.py`, which imports no `mlflow`. `src/train.py`
+keeps only the tracking-URI setup and `train_and_save()`. Six callers and four
+test files updated their import paths; `pipelines/training_flow.py`'s import of
+`train_and_save` (the one name that didn't move) is untouched. Verified at
+runtime, not just by grep: importing `serving.app` no longer puts `mlflow` or
+`src.train` into `sys.modules`.
+
+`pyproject.toml` gained a `training` dependency group (`mlflow`, `metaflow`,
+`matplotlib`, `seaborn` -- verified against the code, not assumed, to have no
+consumer serving's import graph reaches) with `[tool.uv] default-groups =
+["dev", "training"]`, so a bare `uv sync` still installs everything locally;
+the Docker build opts out explicitly (`--no-dev --no-group training`). The
+Dockerfile's blanket `RUN chown -R appuser /app` -- measured to duplicate
+~885MB of the preceding layer via overlay2 copy-up -- was replaced by
+`COPY --chown=appuser:appuser`, with `useradd` moved earlier so the user
+exists first. Measured, not estimated, via a fresh `docker build` (a
+`git stash` round-trip reproduced the "before" number bit-for-bit against the
+earlier recon measurement): serving image DISK USAGE **2.64GB -> 937MB**
+(CONTENT SIZE 612MB -> 223MB). Local pytest was unaffected throughout --
+the `.venv` was never re-synced -- and stayed at 248 passed, 0 failed.
+
+**Note on this file's own W1/W2 entry above ("Attached behavior change (W1/W2):
+inference now consumes the packaged contract..."):** that entry's line "Disposition:
+`src/train.py` gains `load_model_artifact()`" is left exactly as written, per
+this file's append-only rule -- it correctly described where the function was
+added at the time. `load_model_artifact()` (and the rest of the functions
+named above) now live in `src/model_io.py`, not `src/train.py`. This entry is
+the pointer from here on; the W1/W2 entry stands as the historical record of
+where the guard was first added, same discipline as the addr_state-AUC entry's
+note on its own line 127.
+
+**Documentation convention adopted in this round:** README.md, `docs/design.md`,
+and `docs/explainability.md` had accumulated many `file.py:123` / `file.py:45-67`
+citations. A line number goes stale on the next unrelated refactor near that
+line (this round's own `src/train.py` split moved several); a function, class,
+or constant name does not, so those three documents now cite symbols
+(`` `calibrate_model()` ``, `` `LOAN_SCHEMA` ``, `` `TreeExplainer.shap_values` ``,
+...) instead of line numbers wherever a stable name exists. This file
+(`data-decisions.md`) is exempt -- append-only, so its existing citations
+(including the now-stale ones the note above calls out) are left as written,
+the same historical-record reasoning as everywhere else in this file.
+
+**TODO:** none. If a future round wants `data-decisions.md`'s own historical
+`file.py:line` citations converted to symbols too, that would need a new
+append-only entry per citation, not an in-place edit -- not attempted here.

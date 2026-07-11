@@ -43,8 +43,8 @@ reporting that can halt nothing, grey dashed is code not wired into the flow.
 that way rather than connected. (`src/explain.py` was an orphan here too; the `explain` step now
 wires it in as a blue reporting node after fairness, so the image above — traced 2026-07-09 — is
 stale on that one point and is being regenerated.) No calibrator edge runs to the fairness step —
-`run_fairness_audit()` never loads the shipped calibrator, it refits its own isotonic
-(`src/fairness.py:586-587`) — so drawing that edge would be a lie.
+`run_fairness_audit()` never loads the shipped calibrator, it refits its own isotonic inside that
+same function — so drawing that edge would be a lie.
 
 ---
 
@@ -139,52 +139,66 @@ rather than colour.*
 `extra="forbid"`), 500 when the additivity guard fails (`src/explain.py`'s `_assert_additivity`,
 wrapped by `serving/app.py`'s `/score` handler), and 503 when the model bundle or the bureau is
 missing from the running app — reachable only in tests, since production loads both at startup or
-the process never serves at all (`serving/errors.py:27-41`). The startup contract checks — feature
-contract, calibrator binding, category-enum consistency (`serving/artifacts.py:112-156`) — are a
-separate, one-time gate inside `lifespan`: if any of them fail, the process crashes before it
-accepts a single request, which is not the same thing as a per-request 503. `{ }` marks two
-branches that are real but deliberately unwired: a failed bureau pull (`CreditBureau.fetch()`'s
-contract permits raising it; `/score` calls it unguarded because the only implementation today,
-`MockBureau`, performs no I/O and cannot fail — `docs/data-decisions.md` records a 502 error class
-as the first thing to add once a real bureau is wired in) and routing a decision with an empty
-`reason_codes` list to human review (`docs/design.md` §6) — both recorded, neither implemented.
+the process never serves at all (`serving/errors.py`'s module docstring, its "503" section). The
+startup contract checks — feature contract, calibrator binding, category-enum consistency
+(`serving/artifacts.py`'s `load_bundle()`) — are a separate, one-time gate inside `lifespan`: if any
+of them fail, the process crashes before it accepts a single request, which is not the same thing as
+a per-request 503. `{ }` marks two branches that are real but deliberately unwired: a failed bureau
+pull (`CreditBureau.fetch()`'s contract permits raising it; `/score` calls it unguarded because the
+only implementation today, `MockBureau`, performs no I/O and cannot fail — `docs/data-decisions.md`
+records a 502 error class as the first thing to add once a real bureau is wired in) and routing a
+decision with an empty `reason_codes` list to human review (`docs/design.md` §6) — both recorded,
+neither implemented.
 
 `serving/` is a FastAPI adapter over the trained model + calibrator: `POST /score` scores
 one applicant into a decision plus rank-ordered reason codes, `GET /healthz` reports
 readiness and the identity of what's loaded. It reuses `src/`'s logic rather than
-re-implementing it — `/score` calls `explain_applicants()` directly (`serving/app.py:189`),
-the same function `tests/test_explain.py` exercises, so production scoring and tested
-scoring run through one code path, not two.
+re-implementing it — `/score` calls `explain_applicants()` directly, from `serving/app.py`'s
+`/score` handler, the same function `tests/test_explain.py` exercises, so production scoring and
+tested scoring run through one code path, not two.
 
 As of Phase 1, `fico_n` is no longer self-reported by the applicant. `POST /score` takes an
 `applicant_id` instead, and the service fetches `fico_n` from a `CreditBureau` — a
 one-method protocol, `fetch(applicant_id) -> CreditReport` (`serving/bureau.py`), so a real
 bureau client can be swapped in later without touching `/score`. The only implementation
 wired in today is `MockBureau`: deterministic — the same `applicant_id` always returns a
-byte-identical report, performing no I/O to do it (`serving/bureau.py:168-175`) — with
+byte-identical report, performing no I/O to do it (its own docstring) — with
 `fico_n` drawn from a `Normal(mean_fico, std_fico)` distribution seeded by the applicant ID
-(`serving/bureau.py:191-212`). `mean_fico` defaults to 700 and is a constructor argument,
+(`MockBureau.__init__`/`fetch`). `mean_fico` defaults to 700 and is a constructor argument,
 not a constant: `MockBureau(mean_fico=650)` shifts the entire output distribution, a
 deliberate knob for demonstrating a population-level credit-quality drift without touching
 a real bureau record.
 
 Every score response carries three provenance fields alongside the decision — `bureau`,
-`fico_version`, `credit_report_pulled_at` (`serving/schema.py:277-279`) — the same "a
-decision must be able to identify the data it came from" principle already behind the
-`model_trained_at` / `calibrator_trained_at` fields on every response.
+`fico_version`, `credit_report_pulled_at` (the last three fields on `serving/schema.py`'s
+`ScoreResponse`) — the same "a decision must be able to identify the data it came from"
+principle already behind the `model_trained_at` / `calibrator_trained_at` fields on every
+response.
 
 Honestly: `MockBureau` is, by its own docstring, "a `CreditBureau` that never calls a real
-vendor" (`serving/bureau.py:164-166`) — no real bureau is integrated. `serving/` answers
+vendor" — no real bureau is integrated. `serving/` answers
 requests in-process and under Docker but is not deployed anywhere: no host, no
 orchestration ([`docs/design.md`](docs/design.md) §4). A failed bureau pull is a known,
 deliberately deferred gap — `CreditBureau.fetch()`'s contract permits raising, but `/score`
 doesn't yet catch it, because `MockBureau` performs no I/O and cannot fail
-(`serving/errors.py:20-24`; full record in
+(`serving/errors.py`'s module docstring, its "500" section; full record in
 [`docs/data-decisions.md`](docs/data-decisions.md)). And the "no credit-bureau history"
 phrasing above and in "What this isn't" is about the *model's* feature set — eight
 application-time features, none of them utilization, delinquency, or inquiry history — not
 about whether serving has any bureau data path at all; it now does, just not one feeding
 new model features yet.
+
+**Phase 2 decoupled serving from MLflow.** `src/train.py` split into `src/train.py` (MLflow
+experiment-tracking orchestration; `train_and_save()` only) and `src/model_io.py` (the
+encoding helpers, the LightGBM training loop, and `load_model_artifact()` — everything
+`calibrate.py` / `evaluate.py` / `fairness.py` / `explain.py` / `serving/` /
+`pipelines/drift_check.py` actually import). `serving/`'s import graph now bottoms out at
+`model_io.py` and never reaches `mlflow` — confirmed at runtime (`mlflow` and `src.train`
+are absent from `sys.modules` after importing `serving.app`), not just by grep.
+`pyproject.toml` groups `mlflow` / `metaflow` / `matplotlib` / `seaborn` into a `training`
+dependency group the Docker build excludes (`uv sync --no-dev --no-group training`); the
+serving image measured **2.64GB → 937MB**. This changes what ships in the image, not
+whether anything is deployed — see the paragraph above.
 
 ---
 
@@ -197,7 +211,7 @@ new model features yet.
 | **scikit-learn** | Logistic-regression baseline, preprocessing, and the isotonic calibrator |
 | **SciPy** | Two-sample KS statistic in the drift monitor — declared as a direct dependency the moment code imported it directly. Evidently was deliberately not adopted: its web-server + telemetry dependency footprint isn't worth four scalar distribution signals, and hand-rolled PSI matches the repo's hand-rolled audits |
 | **Pandera** | Schema gate that *fails* the pipeline on contract violations (it caught the 495 DTI rows) |
-| **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
+| **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run. Training-only as of Phase 2 — `serving/`'s import graph does not reach it (see "Serving layer" above) |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
 | **pytest** | 248 tests across the modeling layer |
@@ -237,7 +251,9 @@ docs/          Detailed write-ups for each stage
 notebooks/     Exploratory analysis notebook (+ HTML export)
 pipelines/     Metaflow end-to-end training pipeline + the yearly dti_n drift check
 src/           Modeling layer: data loading, validation, features, leakage checks,
-               training, calibration, evaluation, fairness, explanation
+               model I/O + training (mlflow-free encoding/training helpers in
+               model_io.py, MLflow orchestration in train.py), calibration,
+               evaluation, fairness, explanation
 serving/       FastAPI HTTP scoring adapter (/score, /healthz) + the credit-bureau
                protocol/mock (bureau.py) -- not deployed (see docs/design.md §4)
 models/        Trained model + calibrator artifacts (gitignored)

@@ -21,18 +21,18 @@ halts nothing**: MLflow metrics, the temporal sentinel's SKIP, the drift check. 
 dashed is not wired into the flow** — `pipelines/drift_check.py` (a manual entry point) is
 drawn outside the pipeline, not as connected. (`src/explain.py` was drawn there too; the
 `explain` step now wires it in, so the diagram is stale on that one point and is being
-regenerated.) No calibrator edge reaches `@fairness`, which refits its own isotonic
-(`src/fairness.py:586-587`). Every label's file:line is in
+regenerated.) No calibrator edge reaches `@fairness`, which refits its own isotonic inside
+`run_fairness_audit()`. Every label's file:line is in
 [`architecture.html`](architecture.html).
 
 ## 3. Design decisions and their costs
 
 **Split by time; hold out 2018.** A random split lets the model peek at future
 patterns. Train is 2007–2014 (n≈453,804), Validation and Calibration are disjoint
-40,000-row slices of 2015, Test is 2016–2017 (n=462,174) (`src/data_loader.py:144-149`);
-2018 is withheld for suspected right-censoring. The price: a lower headline number, and
-a training set that never sees the 2016+ DTI regime — the train/serve shift the drift
-monitor watches.
+40,000-row slices of 2015, Test is 2016–2017 (n=462,174) (`src/data_loader.py`'s
+`temporal_split()` docstring); 2018 is withheld for suspected right-censoring. The price: a
+lower headline number, and a training set that never sees the 2016+ DTI regime — the
+train/serve shift the drift monitor watches.
 
 **Drop `addr_state`.** The ablation put Mississippi's good-applicant
 Equal-Opportunity ratio at ~0.734–0.745 with state included and ~0.988–0.990 without.
@@ -43,8 +43,9 @@ Mississippi's economics.
 **Optimize regret, not pure profit.** The objectives have different break-even
 thresholds for a well-calibrated probability — `m/(m+LGD) = 0.156` for pure profit,
 `2m/(2m+LGD) = 0.270` once the margin foregone on a wrongly-rejected good borrower is
-counted (`src/evaluate.py:84`, `:93`). The data matches 0.270: the term was always
-there implicitly, and the decision was to name it and make it switchable.
+counted (`src/evaluate.py`'s `pure_profit()`/`regret_profit()` docstrings). The data
+matches 0.270: the term was always there implicitly, and the decision was to name it and
+make it switchable.
 
 **Isotonic calibration — chosen without pricing it.** Isotonic was selected on Brier
 alone, and nobody noticed the choice foreclosed probability-scale attribution: a
@@ -74,10 +75,20 @@ Depth: [`data-decisions.md`](data-decisions.md) (data quality, fairness);
 ## 4. Not yet wired
 
 - **`serving/` is not deployed.** `serving/app.py` answers HTTP requests in-process and under Docker, but nothing runs it as a live service — no host, no orchestration.
+- **Phase 2 did decouple `serving/` from MLflow, though.** `src/train.py` split into
+  `src/train.py` (MLflow orchestration; `train_and_save()` only) and `src/model_io.py` (the
+  encoding helpers, the LightGBM training loop, and `load_model_artifact()` — everything
+  `serving/` and the pipeline's non-training steps actually import). `serving/`'s import
+  graph now bottoms out at `model_io.py` and never reaches `mlflow`.
+  `pyproject.toml` groups `mlflow` / `metaflow` / `matplotlib` / `seaborn` into a `training`
+  dependency group the Docker build excludes; the serving image measured **2.64GB →
+  937MB**. This is a change to what ships in the image, not a change to the bullet above —
+  serving still is not deployed anywhere.
 - **`drift_check.py` is a manual entry point**, not a scheduled job — no CI, no cron,
   no scheduler exists here. It reports; it does not raise (`fail_on_alarm=False`).
 - **`SHAP_SAMPLE_N = 4000`** is inherited from the notebook, with no stated rationale
-  (`src/explain.py:130-136`). The `explain` step now logs it as the `shap_sample_n` param;
+  (`src/explain.py`'s `SHAP_SAMPLE_N` constant). The `explain` step now logs it as the
+  `shap_sample_n` param;
   the ranking it produces is rank-stable across seeds and sample sizes (measured 2026-07-11),
   so 4000 is pinned-and-logged rather than defended — but it stays an inherited constant, not
   a measured convergence threshold.
@@ -91,8 +102,8 @@ Constraints a serving design must answer, not defects to apologize for.
   take it as config or read it from MLflow. It is not `0.25` — at `p_cal` exactly 0.25
   the two disagree.
 - **`LOAN_SCHEMA` cannot validate a live request.** It requires `Default` and
-  `addr_state` as non-nullable columns (`src/data_validation.py:171-183`); a request
-  has neither. The gate is a *training* contract.
+  `addr_state` as non-nullable columns (`src/data_validation.py`'s `LOAN_SCHEMA`); a
+  request has neither. The gate is a *training* contract.
 - **`TreeExplainer.expected_value` is instance state**, overwritten by every
   `shap_values()` call, so a shared explainer is unsafe under concurrency
   ([`explainability.md`](explainability.md) §10).

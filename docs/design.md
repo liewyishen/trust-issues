@@ -107,6 +107,27 @@ Constraints a serving design must answer, not defects to apologize for.
 - **`TreeExplainer.expected_value` is instance state**, overwritten by every
   `shap_values()` call, so a shared explainer is unsafe under concurrency
   ([`explainability.md`](explainability.md) §10).
+- **`fico_n` comes from a mock bureau.** `/score` fetches it through the
+  credit-bureau layer (`serving/bureau.py`'s `CreditBureau` protocol), not off
+  the request — a client that submits its own `fico_n` is rejected
+  (`ScoreRequest`, `extra="forbid"`). The only implementation is `MockBureau`: a
+  deterministic, `mean_fico`-configurable Normal draw, not a real vendor. The
+  layer is real; its data source is simulated.
+- **A pull may raise, and `/score` does not catch it.** `CreditBureau.fetch()`'s
+  contract permits raising on a failed pull, but the handler calls
+  `bureau.fetch(applicant_id)` unguarded because `MockBureau` cannot structurally
+  fail — there is no reachable failure to handle yet. Real-vendor failure
+  handling is a recorded deferral (`docs/data-decisions.md`'s Phase 1
+  bureau-wiring entry), not an omission.
+- **Only `fico_n` moved; `dti_n` stays applicant-reported.** Phase 1 relocated
+  `fico_n` to the bureau but left `dti_n` on the request; `_to_raw_frame()` takes
+  `dti_n` from the request and leaves the pulled `report.dti_n` unused. The
+  bureau sources one of the two credit fields today, by design, not both.
+- **Every decision is returned with its pull's provenance.** `ScoreResponse`
+  carries `bureau`, `fico_version`, and `credit_report_pulled_at` from the
+  fetched `CreditReport`, so a decision made on a bureau-sourced `fico_n` records
+  which pull produced it — the provenance a real bureau integration would audit
+  against.
 
 ## 6. Human-in-the-loop (not implemented)
 

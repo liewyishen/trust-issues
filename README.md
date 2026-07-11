@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-209%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-215%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -38,12 +38,13 @@ trust beats a 0.99 you can't.**
 at; the page's Export-as-PNG button regenerates the image above.*
 
 Colour carries meaning and nothing else: red is a gate that raises and halts the run, blue is
-reporting that can halt nothing, grey dashed is code not wired into the flow. Two modules sit
-outside the pipeline and are drawn that way rather than drawn as connected:
-`pipelines/drift_check.py` is a separate manual entry point, and `src/explain.py` has no caller
-except its tests. No calibrator edge runs to the fairness step — `run_fairness_audit()` never loads
-the shipped calibrator, it refits its own isotonic (`src/fairness.py:586-587`) — so drawing that
-edge would be a lie.
+reporting that can halt nothing, grey dashed is code not wired into the flow.
+`pipelines/drift_check.py` sits outside the pipeline — a separate manual entry point — and is drawn
+that way rather than connected. (`src/explain.py` was an orphan here too; the `explain` step now
+wires it in as a blue reporting node after fairness, so the image above — traced 2026-07-09 — is
+stale on that one point and is being regenerated.) No calibrator edge runs to the fairness step —
+`run_fairness_audit()` never loads the shipped calibrator, it refits its own isotonic
+(`src/fairness.py:586-587`) — so drawing that edge would be a lie.
 
 ---
 
@@ -137,8 +138,8 @@ credit system.
 | **Pandera** | Schema gate that *fails* the pipeline on contract violations (it caught the 495 DTI rows) |
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
-| **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests; not yet wired into the Metaflow pipeline |
-| **pytest** | 209 tests across the modeling layer |
+| **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
+| **pytest** | 215 tests across the modeling layer |
 
 ---
 
@@ -146,7 +147,7 @@ credit system.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (209 passing)
+uv run pytest                                        # run the test suite (215 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
@@ -178,5 +179,5 @@ src/           Modeling layer: data loading, validation, features, leakage check
                training, calibration, evaluation, fairness, explanation
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (209 passing)
+tests/         pytest suite (215 passing)
 ```

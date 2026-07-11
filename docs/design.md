@@ -18,9 +18,10 @@ that is the result, not a problem to optimize away.
 Colour carries meaning and nothing else. **Red is a gate that raises and halts the
 run**: the schema check and three of the four leakage sentinels. **Blue reports and
 halts nothing**: MLflow metrics, the temporal sentinel's SKIP, the drift check. **Grey
-dashed is not wired into the flow** — `pipelines/drift_check.py` (a manual entry point)
-and `src/explain.py` (no caller but its tests) are drawn outside the pipeline, not as
-connected. No calibrator edge reaches `@fairness`, which refits its own isotonic
+dashed is not wired into the flow** — `pipelines/drift_check.py` (a manual entry point) is
+drawn outside the pipeline, not as connected. (`src/explain.py` was drawn there too; the
+`explain` step now wires it in, so the diagram is stale on that one point and is being
+regenerated.) No calibrator edge reaches `@fairness`, which refits its own isotonic
 (`src/fairness.py:586-587`). Every label's file:line is in
 [`architecture.html`](architecture.html).
 
@@ -75,10 +76,11 @@ Depth: [`data-decisions.md`](data-decisions.md) (data quality, fairness);
 - **`serving/` does not exist.** Nothing here answers an HTTP request.
 - **`drift_check.py` is a manual entry point**, not a scheduled job — no CI, no cron,
   no scheduler exists here. It reports; it does not raise (`fail_on_alarm=False`).
-- **Global SHAP importance is not logged to MLflow.** It belongs beside test AUC in the
-  same run; today it prints and returns.
-- **`SHAP_SAMPLE_N = 4000`** is inherited from the notebook, with no stated rationale.
-  It is not a measured convergence threshold (`src/explain.py:130-136`).
+- **`SHAP_SAMPLE_N = 4000`** is inherited from the notebook, with no stated rationale
+  (`src/explain.py:130-136`). The `explain` step now logs it as the `shap_sample_n` param;
+  the ranking it produces is rank-stable across seeds and sample sizes (measured 2026-07-11),
+  so 4000 is pinned-and-logged rather than defended — but it stays an inherited constant, not
+  a measured convergence threshold.
 
 ## 5. Known constraints on serving
 

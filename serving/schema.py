@@ -110,12 +110,12 @@ class ScoreRequest(BaseModel):
        and a client-submitted value would silently go nowhere.
 
     2. An unseen `purpose` is rejected, where _to_lgb_frame degrades it to NaN
-       and scores it (train.py:151-159, which calls that degradation
+       and scores it (model_io.py:103-111, which calls that degradation
        deliberate: "a malformed/missing feature value at inference time
        shouldn't take down serving"). This overrides that, at the HTTP boundary
        only, on the following grounds. purpose in training is nullable=False,
        isin(VALID_PURPOSE) (data_validation.py:169-173), and category_maps is
-       derived from Train alone (train.py:132-145). No training row therefore
+       derived from Train alone (model_io.py:84-96). No training row therefore
        encodes purpose as NaN, so LightGBM's NaN bin for that column received
        zero training rows. Scoring an unseen purpose is not graceful
        degradation; it is a well-formed float from an untrained branch.

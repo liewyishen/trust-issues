@@ -45,7 +45,7 @@ loans (y_true == 0, verified good borrowers), what fraction did the model
 approve? A state's good-applicant approval rate divided by the national
 good-applicant approval rate is that state's EO ratio.
 
-Reuses train.py's _xy/_to_lgb_frame for Layer 1/2's encoding path (auditing
+Reuses model_io.py's _xy/_to_lgb_frame for Layer 1/2's encoding path (auditing
 whatever model is CURRENTLY shipped, via features.py's live
 INCLUDE_ADDR_STATE setting) -- the same train/serve-skew rationale as
 calibrate.py: a second, independently written encoding path here would
@@ -86,7 +86,7 @@ from sklearn.metrics import roc_auc_score
 from .calibrate import DEFAULT_MODEL_PATH, apply_calibration
 from .data_loader import RANDOM_SEED, load_raw, temporal_split
 from .features import NUMERIC, TARGET, add_features, build_categorical
-from .train import LGB_PARAMS, _to_lgb_frame, _xy, load_model_artifact
+from .model_io import LGB_PARAMS, _to_lgb_frame, _xy, load_model_artifact
 
 # ---------------------------------------------------------------------------
 # Constants -- traced to notebooks/analysis.ipynb Section 9, not guesses.
@@ -296,7 +296,7 @@ def audit_layer2(
 
 def _xy_explicit(df: pd.DataFrame, features: list[str]) -> tuple[pd.DataFrame, pd.Series]:
     """
-    Like train.py's _xy(), but selects an EXPLICIT feature list instead of
+    Like model_io.py's _xy(), but selects an EXPLICIT feature list instead of
     the module-level FEATURES from features.py. add_features() itself is
     unchanged and still reused (this is not a second feature-engineering
     path) -- only the column selection AFTER it differs, because Layer 3
@@ -312,9 +312,9 @@ def _to_lgb_frame_explicit(
     X: pd.DataFrame, category_maps: dict[str, pd.Index], categorical_cols: list[str]
 ) -> pd.DataFrame:
     """
-    Like train.py's _to_lgb_frame(), but casts an EXPLICIT categorical
+    Like model_io.py's _to_lgb_frame(), but casts an EXPLICIT categorical
     column list instead of the module-level CATEGORICAL from features.py.
-    train.py's version cannot be reused as-is here: it iterates over
+    model_io.py's version cannot be reused as-is here: it iterates over
     CATEGORICAL, which reflects whichever ONE variant (with-state or
     no-state) happens to be configured as production right now, while
     Layer 3 needs to encode BOTH variants in the same call to

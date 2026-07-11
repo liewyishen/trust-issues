@@ -258,7 +258,7 @@ def importance_metrics(imp: pd.DataFrame) -> dict[str, float]:
 # could surface as one, but so does an ordinary bug, and swallowing them would
 # silently blind the step. The boundary is drawn on an allowlist, not on
 # exception type, precisely because _assert_additivity and load_model_artifact
-# both raise a bare ValueError (src/explain.py:221, src/train.py:526).
+# both raise a bare ValueError (src/explain.py:221, src/model_io.py:354).
 _EXPLAIN_SKIP_ERRORS = (ImportError, MemoryError, OSError)
 
 

@@ -8,14 +8,14 @@ and mean predicted probability before/after.
 
 This module loads the packaged {model, features, category_maps, ...} dict
 produced by train.py's train_and_save() (models/lgbm_model.pkl) rather than
-a bare model, and reuses train.py's private encoding helpers (_xy,
+a bare model, and reuses model_io.py's private encoding helpers (_xy,
 _to_lgb_frame) so Calib/Test are encoded EXACTLY the way the model was
 trained -- a second, independently-written encoding path here would be
 exactly the kind of train/serve skew train.py's own packaging comment warns
 about.
 
 Honest framing, worth stating up front since it's easy to get backwards:
-removing scale_pos_weight (a train.py decision, made before this module ever
+removing scale_pos_weight (a model_io.py decision, made before this module ever
 runs) is what does most of the calibration work -- it pulls mean predicted
 probability from ~0.48 down to ~0.17 against an actual default rate of
 ~0.21-0.23, resolving roughly 90% of the gap on its own. Isotonic regression
@@ -35,7 +35,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import brier_score_loss, roc_auc_score
 
 from .data_loader import load_raw, temporal_split
-from .train import DEFAULT_MODEL_DIR, _to_lgb_frame, _xy, load_model_artifact
+from .model_io import DEFAULT_MODEL_DIR, _to_lgb_frame, _xy, load_model_artifact
 
 DEFAULT_MODEL_PATH = DEFAULT_MODEL_DIR / "lgbm_model.pkl"
 
@@ -111,7 +111,7 @@ def calibrate_model(
     own (possibly overconfident) training-set behavior instead of correcting
     it -- calibration requires data the model has not seen shape its
     predictions from. Test is supposed to be touched exactly once, at final
-    evaluation (see train.py's train_lgb() docstring on early stopping for
+    evaluation (see model_io.py's train_lgb() docstring on early stopping for
     the same discipline) -- fitting the calibrator there would spend that
     one look on calibration instead of on an honest final read. Calib is a
     third, disjoint 2015 slice that exists for exactly this purpose: data

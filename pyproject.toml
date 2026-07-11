@@ -13,19 +13,25 @@ dependencies = [
     # dependency, serving/ breaks at import time in production rather than in
     # CI. starlette is NOT declared here, because nothing in this repo imports
     # it; it is fastapi's own dependency and fastapi is responsible for it.
+    #
+    # Every entry below is a verified serving-time import: fastapi/pydantic/
+    # uvicorn (the HTTP boundary), lightgbm (the booster), joblib (artifact
+    # load), pandas (every frame), numpy (bureau.py/explain.py), scipy
+    # (explain.py's scipy.special.expit), scikit-learn (IsotonicRegression,
+    # plus model_io.py's module-level sklearn imports), pandera
+    # (data_validation.py, reached transitively through serving/schema.py),
+    # shap (explain.py's TreeExplainer). mlflow/metaflow/matplotlib/seaborn
+    # are deliberately NOT here -- see the "training" dependency group below;
+    # serving's import graph never reaches any of the four.
     "fastapi>=0.138.2",
     "joblib>=1.5.3",
     "lightgbm>=4.6.0",
-    "matplotlib>=3.11.0",
-    "metaflow>=2.19.35",
-    "mlflow>=3.14.0",
     "numpy>=2.4.6",
     "pandas>=2.3.3",
     "pandera>=0.32.1",
     "pydantic>=2.13.4",
     "scikit-learn>=1.9.0",
     "scipy>=1.17.1",
-    "seaborn>=0.13.2",
     "shap>=0.49.1",
     "uvicorn>=0.49.0",
 ]
@@ -33,9 +39,36 @@ dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 
+[tool.uv]
+# "training" is opt-out, not opt-in, by default: without this, a bare
+# `uv sync` would prune mlflow/metaflow/matplotlib/seaborn from an existing
+# environment the moment this group exists, silently breaking
+# tests/test_train.py and tests/test_training_flow.py for anyone who runs
+# `uv sync` out of habit rather than deliberately asking for the slim set.
+# Keeping both groups default preserves "uv sync installs everything" for
+# local/dev/CI-full use; the serving image is the one caller that opts OUT
+# explicitly (--no-dev --no-group training), because that is the one place
+# the distinction is supposed to matter.
+default-groups = ["dev", "training"]
+
 [dependency-groups]
 dev = [
     "ipykernel>=7.3.0",
     "jupyter>=1.1.1",
     "pytest>=9.1.1",
+]
+# Training/notebook-only, verified against serving's actual import graph:
+# pipelines/training_flow.py imports metaflow; src/train.py imports mlflow
+# for its experiment-tracking orchestration; notebooks/analysis.ipynb imports
+# matplotlib and seaborn. None of the four is imported anywhere serving/app.py
+# transitively reaches (serving now bottoms out at src/model_io.py, which
+# does not import mlflow -- see src/train.py's docstring). The serving Docker
+# image installs core dependencies only, via `uv sync --frozen --no-dev
+# --no-group training --no-install-project`; local/dev/CI installs get this
+# group by default (see [tool.uv] default-groups above).
+training = [
+    "matplotlib>=3.11.0",
+    "metaflow>=2.19.35",
+    "mlflow>=3.14.0",
+    "seaborn>=0.13.2",
 ]

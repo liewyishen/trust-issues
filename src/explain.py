@@ -49,7 +49,7 @@ We are not lawyers.
 Whether the shipped calibrator should be replaced is NOT decided by this module,
 and nothing here depends on the answer (docs/explainability.md Section 8).
 
-Reuses train.py's encoding path (_x / _to_lgb_frame / load_model_artifact) and
+Reuses model_io.py's encoding path (_x / _to_lgb_frame / load_model_artifact) and
 calibrate.py's calibration path (load_calibrator / apply_calibration) rather
 than re-deriving either -- the same train/serve-skew rationale calibrate.py's
 module docstring gives. Note _x, not _xy: _xy indexes engineered[TARGET] and so
@@ -70,7 +70,7 @@ from scipy.special import expit
 from .calibrate import DEFAULT_MODEL_PATH, apply_calibration, load_calibrator
 from .data_loader import RANDOM_SEED, load_raw, temporal_split
 from .features import FEATURES
-from .train import _to_lgb_frame, _x, load_model_artifact
+from .model_io import _to_lgb_frame, _x, load_model_artifact
 
 # ---------------------------------------------------------------------------
 # CONTRIBUTION_SCALE -- the axis every number in this module's output lives on.
@@ -78,7 +78,7 @@ from .train import _to_lgb_frame, _x, load_model_artifact
 # Exported as a constant, not spelled inline, so a caller can assert against it
 # (`out["scale"] == explain.CONTRIBUTION_SCALE`) instead of string-matching a
 # literal that could be silently reworded. TreeExplainer attributes the raw
-# margin for objective="binary" boosters (train.py's LGB_PARAMS); the decision
+# margin for objective="binary" boosters (model_io.py's LGB_PARAMS); the decision
 # uses the isotonic-calibrated probability. Two transforms separate them --
 # sigmoid, then isotonic. See docs/explainability.md Section 1.
 # ---------------------------------------------------------------------------

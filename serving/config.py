@@ -36,7 +36,7 @@ from src.calibrate import DEFAULT_MODEL_PATH
 # lives only in MLflow run history, so a service must take it as config or read
 # it back from MLflow. A known gap, recorded in docs/design.md Section 5.
 # Packaging it into the artifact would reopen the feature contract
-# load_model_artifact() enforces (train.py:495) and every test that reads it.
+# load_model_artifact() enforces (model_io.py:323) and every test that reads it.
 # Deliberately not done here.
 # ---------------------------------------------------------------------------
 SELECTED_THRESHOLD: float = 0.25000000000000006

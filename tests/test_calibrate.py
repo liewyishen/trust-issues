@@ -9,9 +9,9 @@ predictions (AUC is preserved), and the calibrator round-trips through
 joblib the same way train.py's model artifact does.
 
 To get a meaningfully miscalibrated raw model without real data, the model
-artifact used here is trained WITH scale_pos_weight (via train.py's own
+artifact used here is trained WITH scale_pos_weight (via model_io.py's own
 train_lgb(..., use_spw=True)) -- the exact mechanism notebooks/analysis.ipynb
-Cell 25 and train.py's run_spw_ablation() identify as inflating mean
+Cell 25 and model_io.py's run_spw_ablation() identify as inflating mean
 predicted probability without improving ranking. That gives calibration
 something real to correct.
 
@@ -26,7 +26,7 @@ import pytest
 import joblib
 
 from src.features import CATEGORICAL, FEATURES
-from src.train import train_lgb
+from src.model_io import train_lgb
 from src.calibrate import calibrate_model, apply_calibration, load_calibrator
 
 

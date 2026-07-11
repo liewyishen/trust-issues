@@ -3,11 +3,11 @@ Feature engineering for the LendingClub granting-model dataset.
 
 Fixes notebooks/analysis.ipynb Cell 17 in place as reusable, testable code:
 ordinal-encode emp_length, derive an explicit missingness flag, and define
-the feature/target contract every downstream module (train.py, calibrate.py,
-evaluate.py, fairness.py) imports instead of re-declaring its own copy.
+the feature/target contract every downstream module (train.py, model_io.py,
+calibrate.py, evaluate.py, fairness.py) imports instead of re-declaring its own copy.
 
 Single responsibility: derive columns and name the feature list. Imputation,
-one-hot encoding, and scaling are train.py's job (sklearn Pipeline / LightGBM's
+one-hot encoding, and scaling are model_io.py's job (sklearn Pipeline / LightGBM's
 native categorical + NaN handling), not this module's.
 """
 

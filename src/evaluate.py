@@ -58,7 +58,7 @@ import pandas as pd
 from .calibrate import DEFAULT_MODEL_PATH, apply_calibration, load_calibrator
 from .data_loader import load_raw, temporal_split
 from .features import TARGET
-from .train import _to_lgb_frame, _xy, load_model_artifact
+from .model_io import _to_lgb_frame, _xy, load_model_artifact
 
 # ---------------------------------------------------------------------------
 # Cost model constants -- traced to notebooks/analysis.ipynb Cell 31, not
@@ -225,7 +225,7 @@ def _predict_calibrated(
     Load the packaged model + a previously fit calibrator, and return
     calibrated predicted probabilities for df.
 
-    Reuses train.py's _xy/_to_lgb_frame for encoding and calibrate.py's
+    Reuses model_io.py's _xy/_to_lgb_frame for encoding and calibrate.py's
     load_calibrator/apply_calibration for calibration, rather than each
     caller in this module (select_threshold, evaluate_at_threshold)
     independently re-deriving its own encoding or re-fitting its own

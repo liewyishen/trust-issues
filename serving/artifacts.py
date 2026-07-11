@@ -19,7 +19,7 @@ from serving.config import CALIBRATOR_PATH, MODEL_PATH, SELECTED_THRESHOLD
 from src.calibrate import load_calibrator
 from src.data_validation import VALID_HOME_OWNERSHIP, VALID_PURPOSE
 from src.explain import _calibrator_trained_at
-from src.train import load_model_artifact
+from src.model_io import load_model_artifact
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ def _assert_serving_enums_match_artifact(category_maps: dict[str, pd.Index]) -> 
 
     schema.py validates `purpose` and `home_ownership_n` against
     data_validation's VALID_PURPOSE / VALID_HOME_OWNERSHIP. The model was fit
-    against category_maps, derived from Train alone (train.py:132-145). Those
+    against category_maps, derived from Train alone (model_io.py:84-96). Those
     are two independent sources of truth for the same list, and nothing has
     ever compared them. Today they agree exactly -- 14 purposes and 4 ownership
     values, verified by run. That agreement is a property of the current
@@ -120,7 +120,7 @@ def load_bundle(
 
     Three gates, none of them new:
 
-      load_model_artifact (train.py:495)  raises if the packaged FEATURES /
+      load_model_artifact (model_io.py:323)  raises if the packaged FEATURES /
           CATEGORICAL differ from what features.py declares now.
       load_calibrator (calibrate.py:56)   raises if the calibrator was fit
           against a different model instance (trained_at mismatch).

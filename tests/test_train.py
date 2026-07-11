@@ -1,5 +1,5 @@
 """
-Tests for src/train.py
+Tests for src/train.py and src/model_io.py
 
 Uses small synthetic DataFrames throughout -- never the real CSV -- and does
 not chase realistic AUC numbers. What's locked down here is the CONTRACT:
@@ -21,9 +21,10 @@ import pytest
 import joblib
 import mlflow
 
-import src.train as train_module
+import src.model_io as model_io_module
 from src.features import add_features, CATEGORICAL, FEATURES, TARGET
-from src.train import train_and_save, train_lgb, load_model_artifact, _x, _xy
+from src.train import train_and_save
+from src.model_io import train_lgb, load_model_artifact, _x, _xy
 
 
 def _make_split(n, purposes, homes, states, emp_lengths, rng):
@@ -141,15 +142,15 @@ def test_unseen_test_category_does_not_crash_prediction(synthetic_splits):
 # ---------------------------------------------------------------------------
 def test_early_stopping_valid_sets_excludes_test(synthetic_splits, monkeypatch):
     captured = {}
-    original_train = train_module.lgb.train
+    original_train = model_io_module.lgb.train
 
     def spy(params, train_set, **kwargs):
         captured["valid_names"] = kwargs.get("valid_names")
         return original_train(params, train_set, **kwargs)
 
-    monkeypatch.setattr(train_module.lgb, "train", spy)
+    monkeypatch.setattr(model_io_module.lgb, "train", spy)
 
-    train_module.train_lgb(
+    model_io_module.train_lgb(
         synthetic_splits, use_spw=False, num_boost_round=20, early_stopping_rounds=5,
     )
 

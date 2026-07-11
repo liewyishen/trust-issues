@@ -27,7 +27,7 @@ The error taxonomy, and why each failure lands where it does.
 503 -- in production, NOTHING.
 
       A missing pickle (FileNotFoundError), a feature-contract mismatch
-      (load_model_artifact, train.py:495), a stale calibrator (load_calibrator,
+      (load_model_artifact, model_io.py:323), a stale calibrator (load_calibrator,
       calibrate.py:56), or a schema/category divergence
       (_assert_serving_enums_match_artifact) are all DEPLOYMENT errors with
       nothing to retry. The right behavior is for lifespan to raise, uvicorn to

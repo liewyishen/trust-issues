@@ -91,11 +91,11 @@ from src.data_loader import (  # noqa: E402
 )
 from src.data_validation import DTI_MAX_REAL, DTI_SENTINEL  # noqa: E402
 
-# Reusing train.py's private encoding helpers over rewriting the encoding is
+# Reusing model_io.py's private encoding helpers over rewriting the encoding is
 # the same anti-skew decision calibrate.py documents at its own import site:
 # a second, independently written encoding path here would be exactly the
 # train/serve skew this repo keeps warning about.
-from src.train import _to_lgb_frame, _xy, load_model_artifact  # noqa: E402
+from src.model_io import _to_lgb_frame, _xy, load_model_artifact  # noqa: E402
 
 MLFLOW_RUN_NAME = "drift_check"
 

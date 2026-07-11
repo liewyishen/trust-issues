@@ -42,7 +42,7 @@ import joblib
 from scipy.special import expit
 
 from src.features import CATEGORICAL, FEATURES, TARGET
-from src.train import _to_lgb_frame, _x, load_model_artifact, train_lgb
+from src.model_io import _to_lgb_frame, _x, load_model_artifact, train_lgb
 from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
 from src.explain import (
     ADDITIVITY_ATOL,
@@ -265,7 +265,7 @@ def test_p_cal_exactly_0_25_flips_between_the_constant_and_the_selected_threshol
 
 # ---------------------------------------------------------------------------
 # 3. Fail-closed, both guards, THROUGH explain.py's own entry point. The guards
-#    existing in train.py / calibrate.py proves nothing about whether this
+#    existing in model_io.py / calibrate.py proves nothing about whether this
 #    module arms them.
 # ---------------------------------------------------------------------------
 def test_feature_contract_mismatch_fails_closed(applicants, artifact, tmp_path, calibrator_path):
@@ -688,7 +688,7 @@ def test_shap_check_additivity_is_inert_on_lightgbm(applicants, artifact):
 
 
 # ---------------------------------------------------------------------------
-# 12. An unseen category degrades to NaN for the MODEL (train.py's graceful
+# 12. An unseen category degrades to NaN for the MODEL (model_io.py's graceful
 #     inference path) but the reason code still reports the string the
 #     applicant supplied. "Denied because purpose = nan" is not actionable.
 # ---------------------------------------------------------------------------
@@ -698,7 +698,7 @@ def test_unseen_category_keeps_its_human_readable_value(
     row = applicants.iloc[[0]].copy()
     row["purpose"] = "a_purpose_never_seen_in_training"
 
-    # The MODEL sees NaN -- train.py's deliberate graceful-degradation path.
+    # The MODEL sees NaN -- model_io.py's deliberate graceful-degradation path.
     assert _to_lgb_frame(_x(row), artifact["category_maps"])["purpose"].isna().all()
 
     out = explain_applicants(row, model_path=model_path, calibrator_path=calibrator_path)[0]

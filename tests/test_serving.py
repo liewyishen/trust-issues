@@ -67,7 +67,7 @@ from fastapi.testclient import TestClient
 import src.explain as src_explain
 from src.data_validation import VALID_HOME_OWNERSHIP, VALID_PURPOSE
 from src.features import CATEGORICAL, FEATURES, TARGET, emp_order
-from src.train import _x, load_model_artifact, train_lgb
+from src.model_io import _x, load_model_artifact, train_lgb
 from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
 from src.explain import DEFAULT_EXPLAIN_THRESHOLD, explain_applicants
 

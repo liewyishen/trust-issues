@@ -129,6 +129,26 @@ credit system.
 
 ## Serving layer
 
+![Serving flow](docs/architecture-serving.png)
+
+*Read this one differently from the diagram above: it traces a single HTTP request through
+`POST /score`, not a pipeline run, and its legend is bracket notation — `[X]`, `( )`, `{ }` —
+rather than colour.*
+
+`[X]` is a gate that can halt the request: 422 on invalid input (closed enums, strict floats,
+`extra="forbid"`), 500 when the additivity guard fails (`src/explain.py`'s `_assert_additivity`,
+wrapped by `serving/app.py`'s `/score` handler), and 503 when the model bundle or the bureau is
+missing from the running app — reachable only in tests, since production loads both at startup or
+the process never serves at all (`serving/errors.py:27-41`). The startup contract checks — feature
+contract, calibrator binding, category-enum consistency (`serving/artifacts.py:112-156`) — are a
+separate, one-time gate inside `lifespan`: if any of them fail, the process crashes before it
+accepts a single request, which is not the same thing as a per-request 503. `{ }` marks two
+branches that are real but deliberately unwired: a failed bureau pull (`CreditBureau.fetch()`'s
+contract permits raising it; `/score` calls it unguarded because the only implementation today,
+`MockBureau`, performs no I/O and cannot fail — `docs/data-decisions.md` records a 502 error class
+as the first thing to add once a real bureau is wired in) and routing a decision with an empty
+`reason_codes` list to human review (`docs/design.md` §6) — both recorded, neither implemented.
+
 `serving/` is a FastAPI adapter over the trained model + calibrator: `POST /score` scores
 one applicant into a decision plus rank-ordered reason codes, `GET /healthz` reports
 readiness and the identity of what's loaded. It reuses `src/`'s logic rather than

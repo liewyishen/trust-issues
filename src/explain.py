@@ -156,15 +156,16 @@ ADDITIVITY_ATOL = 1e-9
 
 
 def _assert_additivity(
-    booster,
-    X_lgb: pd.DataFrame,
     sv: np.ndarray,
     base: float,
     tree_limit: int | None,
+    booster=None,
+    X_lgb: pd.DataFrame | None = None,
     atol: float = ADDITIVITY_ATOL,
 ) -> None:
     """
-    Prove base + sum(contributions) IS the margin the booster scores with.
+    Prove base + sum(contributions) IS the margin the booster scores with --
+    when there is a booster to prove it against.
 
     This is the check shap's `check_additivity=True` is widely believed to
     perform and does not (see _shap_matrix). It costs one extra
@@ -178,6 +179,24 @@ def _assert_additivity(
     scored on. That is a wrong explanation, not a degraded one, and there is no
     safe way to serve it.
 
+    Self-arming, like leakage_check's temporal sentinel
+    --------------------------------------------------
+    `booster` and `X_lgb` are optional. Additivity is `base + sum(sv) == the
+    margin the booster scores`, so WITHOUT a booster (and the exact frame it
+    scores) there is no margin to compare against and nothing to check. In that
+    state this SKIPs -- explicitly, by returning -- exactly as
+    check_temporal_consistency SKIPs when the cleaned dataset carries no date
+    column to compare against issue_d (pipelines/training_flow.py). It arms the
+    moment both are in hand.
+
+    _shap_matrix ALWAYS passes both, so the loading path is always checked. The
+    precomputed escape hatch loads no booster, so by default it passes neither
+    and the values are trusted -- but a hatch caller that already holds the
+    booster and the frame it scored (explain_applicants' `booster`/`X_lgb`
+    parameters) arms this check for free, no new load. `booster` XOR `X_lgb`
+    (one supplied, the other not) also skips: a half-supplied check is not a
+    check, and silently half-checking is worse than a clean skip.
+
     `num_iteration=tree_limit` mirrors exactly what shap forwards to LightGBM
     (_tree.py:580), so the margin compared against is the margin of the same
     trees that were explained.
@@ -185,9 +204,12 @@ def _assert_additivity(
     Raises
     ------
     ValueError
-        If any row's reconstruction drifts from the raw margin by more than
-        `atol`.
+        If a booster and frame are in hand and any row's reconstruction drifts
+        from the raw margin by more than `atol`.
     """
+    if booster is None or X_lgb is None:
+        return                          # not in hand -> nothing to check -> skip
+
     margin = np.asarray(
         booster.predict(X_lgb, num_iteration=tree_limit, raw_score=True), dtype=float,
     ).ravel()
@@ -290,9 +312,17 @@ def _shap_matrix(
     only purpose. It costs one extra predict (~1.3 ms for one row) and it runs
     wherever contributions are produced -- which is why the check lives at the
     point of PRODUCTION rather than in explain_applicants(): run_explanation()
-    and global_importance() come through here too, and explain_applicants()'s
-    precomputed escape hatch bypasses this function entirely with values that
-    were already verified on their way in.
+    and global_importance() come through here too.
+
+    explain_applicants()'s precomputed escape hatch bypasses this function
+    entirely. On that path additivity is a PRECONDITION on the caller, enforced
+    when a booster is available and trusted otherwise: _assert_additivity()
+    self-arms if the hatch caller hands explain_applicants a booster and the
+    frame it scored, and skips if not (see its docstring). The one in-repo hatch
+    caller, run_explanation(), satisfies the precondition upstream -- it computes
+    sv/base through THIS function first, where the guard runs over the whole
+    sample, before slicing one row back into the hatch -- so it does not need to
+    re-arm the check, and does not.
 
     Returns
     -------
@@ -332,7 +362,7 @@ def _shap_matrix(
             "changed -- see _shap_matrix."
         )
 
-    _assert_additivity(booster, X_lgb, sv, float(base), tree_limit)
+    _assert_additivity(sv, float(base), tree_limit, booster=booster, X_lgb=X_lgb)
     return sv, float(base)
 
 
@@ -387,6 +417,9 @@ def explain_applicants(
     shap_values: np.ndarray | None = None,
     base_value: float | None = None,
     p_cal: np.ndarray | None = None,
+    booster=None,
+    X_lgb: pd.DataFrame | None = None,
+    tree_limit: int | None = None,
 ) -> list[dict]:
     """
     Explain one row per applicant, on the raw log-odds margin.
@@ -430,6 +463,19 @@ def explain_applicants(
         hatch select_threshold()'s `p_val` provides, and how tests exercise
         this without a real artifact pair on disk. run_explanation() uses it to
         score the sample once and explain it once.
+    booster, X_lgb, tree_limit : Booster / pd.DataFrame / int or None
+        The escape hatch's additivity self-check, enforced-when-possible. On
+        the hatch path the precomputed values are trusted (the hatch loads no
+        booster, so nothing here can re-derive the margin). A caller that
+        ALREADY holds the booster and the exact LightGBM frame it scored may
+        pass them -- together with the tree_limit used -- and this proves
+        base_value + sum(shap_values) IS that booster's raw margin before
+        ranking any reason code, raising if not. All three default to None, in
+        which case the check skips and behaviour is exactly as before: no new
+        load, no cost. Every in-repo caller uses the default; run_explanation()
+        verifies upstream (via _shap_matrix) and deliberately does not re-arm
+        this. Ignored entirely on the loading path, where _shap_matrix already
+        ran the identical check. See _assert_additivity's "Self-arming" note.
 
     Returns
     -------
@@ -495,23 +541,35 @@ def explain_applicants(
     shap_values = np.asarray(shap_values)
     p_cal = np.asarray(p_cal, dtype=float)
 
+    # Escape-hatch additivity self-check, enforced-when-possible. Hatch path
+    # only -- the loading path already ran the identical check inside
+    # _shap_matrix. This arms iff the caller put the booster and the exact frame
+    # it scored in hand (the booster/X_lgb/tree_limit parameters), then proves
+    # base + sum(sv) IS that booster's raw margin before any reason code is
+    # ranked. When they are None -- every in-repo caller, today -- it skips, so
+    # this is a no-op and nothing changes. It loads nothing: the booster and
+    # frame are the caller's, already in memory. See _assert_additivity.
+    if all(hatch):
+        _assert_additivity(
+            shap_values, float(base_value), tree_limit,
+            booster=booster, X_lgb=X_lgb,
+        )
+
     # The margin is reconstructed from the attribution rather than re-predicted:
     # base + sum(contributions) IS the raw margin, because tree_path_dependent
     # SHAP is exactly additive. That identity is the one shap's
     # check_additivity=True is widely believed to guarantee and does not -- it
     # is inert on the LightGBM branch (_tree.py:556; see _shap_matrix). What
     # actually enforces it depends on which path reached this line:
-    #   - loading path: _shap_matrix just proved it, via _assert_additivity
-    #     (line 335), against booster.predict(raw_score=True).
-    #   - escape-hatch path: base_value and shap_values arrived precomputed and
-    #     are NOT re-checked here -- the hatch loaded no booster, so there is
-    #     nothing to check them against. Additivity rests on the caller having
-    #     verified them upstream. The one in-repo caller, run_explanation(),
-    #     does: it computes sv/base through _shap_matrix (line 689), where the
-    #     guard runs over the whole sample, before slicing one row back in here.
-    # So on the hatch path this reconstruction TRUSTS what _assert_additivity
-    # ENFORCES on the loading path -- a precondition on the caller, not a check
-    # made here, because the hatch holds no booster to make it with.
+    #   - loading path: _shap_matrix just proved it, via _assert_additivity,
+    #     against booster.predict(raw_score=True).
+    #   - escape-hatch path: base_value and shap_values arrived precomputed.
+    #     Additivity is a PRECONDITION on the caller here -- enforced by the
+    #     self-check just above WHEN the caller handed over a booster and frame,
+    #     trusted otherwise. The one in-repo caller, run_explanation(), verifies
+    #     upstream instead: it computes sv/base through _shap_matrix, where the
+    #     guard runs over the whole sample, before slicing one row back in here,
+    #     so it passes no booster and this stays a no-op.
     #
     # Deriving p_raw as sigmoid(margin) is exact regardless of path: objective=
     # "binary" means Booster.predict() is precisely sigmoid of this quantity,

@@ -428,6 +428,69 @@ def test_partial_escape_hatch_raises(applicants, supplied):
 
 
 # ---------------------------------------------------------------------------
+# 8a. The escape hatch self-arms when the caller hands over a booster. The same
+#     fail-closed additivity invariant _shap_matrix enforces on the loading
+#     path becomes reachable on the hatch path when, and only when, a booster
+#     and the frame it scored are in hand -- structurally the pattern
+#     leakage_check's temporal sentinel uses (SKIP when there is nothing to
+#     check against, self-arm the moment there is). All three sides are pinned:
+#     honest values pass, corrupted values raise, and NO booster is still no
+#     check -- the hatch never starts requiring one.
+# ---------------------------------------------------------------------------
+def _honest_hatch_values(artifact, applicants):
+    """base + contributions straight from pred_contrib -- additive by
+    construction (docs/explainability.md Section 10), so no shap import and no
+    circular dependence on _shap_matrix for the honest case."""
+    booster = artifact["model"]
+    best_iteration = artifact["best_iteration"]
+    X_lgb = _to_lgb_frame(_x(applicants), artifact["category_maps"])
+    phi = booster.predict(X_lgb, num_iteration=best_iteration, pred_contrib=True)
+    return booster, X_lgb, best_iteration, phi[:, :-1], float(phi[0, -1])
+
+
+def test_hatch_self_check_arms_with_a_booster_both_sides(applicants, artifact):
+    booster, X_lgb, best_iteration, sv, base = _honest_hatch_values(artifact, applicants)
+    p_cal = np.full(len(applicants), 0.1)          # unused by the additivity check
+
+    # honest values + booster in hand -> the check runs and passes
+    ok = explain_applicants(
+        applicants, shap_values=sv, base_value=base, p_cal=p_cal,
+        booster=booster, X_lgb=X_lgb, tree_limit=best_iteration,
+    )
+    assert len(ok) == len(applicants)
+
+    # corrupted contributions + booster in hand -> the check runs and raises,
+    # THROUGH the hatch, exactly as it would on the loading path
+    bad = sv.copy()
+    bad[0, 0] += 1.0
+    with pytest.raises(ValueError, match="Additivity check failed"):
+        explain_applicants(
+            applicants, shap_values=bad, base_value=base, p_cal=p_cal,
+            booster=booster, X_lgb=X_lgb, tree_limit=best_iteration,
+        )
+
+
+def test_hatch_without_a_booster_does_not_check_and_does_not_require_one(applicants, artifact):
+    """The third side: the SAME corrupted contributions, no booster passed. The
+    check cannot run -- there is no margin to compare against -- so it does not,
+    and the call proceeds and returns a decision. The hatch's default behaviour
+    is unchanged; the self-check is opt-in by handing over a booster, never a
+    new requirement. The corruption is genuinely present, not silently fixed:
+    the reconstructed margin still carries the +1.0."""
+    _booster, _X_lgb, _best, sv, base = _honest_hatch_values(artifact, applicants)
+    bad = sv.copy()
+    bad[0, 0] += 1.0
+
+    out = explain_applicants(
+        applicants, shap_values=bad, base_value=base,
+        p_cal=np.full(len(applicants), 0.1),        # no booster / X_lgb -> no check
+    )
+    assert len(out) == len(applicants)
+    assert out[0]["decision"] in {"REJECT", "APPROVE"}
+    assert out[0]["raw_margin_log_odds"] == pytest.approx(base + float(bad[0].sum()))
+
+
+# ---------------------------------------------------------------------------
 # 9. Explanation NEVER reads the target. This is the serving-path guarantee,
 #    proven the way test_evaluate proves its split discipline: by removing the
 #    column entirely, so any read raises. It is also the test that would have

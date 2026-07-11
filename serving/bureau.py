@@ -34,13 +34,15 @@ Two things this module refuses to do, on purpose:
     value and an applicant-reported one are held to the identical domain
     contract. Fields with no existing analog in this repo
     (inquiry_window_days, and the mock's synthetic pulled_at) are called out
-    below as new to this module, since rule 4 of this task requires that.
+    below as new to this module -- invented values must be disclosed as
+    invented, this repo's "don't armchair a number silently" discipline.
 
 Only the two credit fields the current 8-feature model actually consumes
 (fico_n, dti_n) are modeled. A real bureau report carries dozens more fields
 (delinq_2yrs, open_acc, revol_util, ...) -- none of them feed the shipped
-model, so adding them here would be dead weight with no consumer. See the
-task report's "next round suggestions" for what a fuller report might add.
+model, so adding them here would be dead weight with no consumer.
+docs/data-decisions.md's "Phase 1 credit-bureau foundation" entry records
+which fields were considered and why they stayed out.
 """
 
 from __future__ import annotations

@@ -1,13 +1,17 @@
 """
 Tests for serving/bureau.py
 
-Locks down two things, and nothing about scoring: this module is not wired
-into the /score path (see serving/bureau.py's module docstring), so nothing
-here touches ScoreRequest, explain_applicants, or serving/app.py.
+Locks down two things, and nothing about scoring: the /score wiring
+(serving/app.py fetches fico_n through bureau.fetch() before scoring) is
+exercised by tests/test_serving.py, so nothing here touches ScoreRequest,
+explain_applicants, or serving/app.py.
 
-  1. CreditReport's contract: fico_n and dti_n are held to the SAME bounds
-     ScoreRequest already binds to (imported from src/data_validation.py, not
-     redeclared), and provenance metadata cannot be blank or out-of-enum.
+  1. CreditReport's contract: fico_n and dti_n are bound to constants
+     imported from src/data_validation.py, not redeclared -- for dti_n the
+     same DTI_MAX_REAL/DTI_SENTINEL pair ScoreRequest still binds, for
+     fico_n the FICO_MIN/FICO_MAX bound that lives on CreditReport alone now
+     that ScoreRequest no longer carries the field -- and provenance metadata
+     cannot be blank or out-of-enum.
   2. MockBureau is deterministic: fetch(applicant_id) returns a
      byte-identical report every call for the same applicant_id, and the
      report it returns always satisfies CreditReport's own validation.
@@ -57,7 +61,8 @@ def test_good_report_validates():
 
 # ---------------------------------------------------------------------------
 # 2. fico_n -- bounds imported from src/data_validation.py, not redeclared.
-#    Same FICO_MIN/FICO_MAX ScoreRequest.fico_n already binds to.
+#    The same FICO_MIN/FICO_MAX that ScoreRequest.fico_n bound before Phase 1
+#    moved the field to the bureau pull.
 # ---------------------------------------------------------------------------
 def test_fico_at_declared_bounds_passes():
     assert CreditReport(**_mutate(fico_n=FICO_MIN)).fico_n == FICO_MIN

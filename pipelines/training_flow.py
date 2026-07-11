@@ -2,9 +2,9 @@
 End-to-end LendingClub credit-default training pipeline (Metaflow).
 
 Chains src/'s modeling layer into one linear FlowSpec and unifies the key
-metrics from train / calibrate / evaluate / fairness into a SINGLE MLflow run
-(the production LightGBM run), so one model execution produces one complete
-experiment archive instead of numbers scattered across the terminal.
+metrics from train / calibrate / evaluate / fairness / explain into a SINGLE
+MLflow run (the production LightGBM run), so one model execution produces one
+complete experiment archive instead of numbers scattered across the terminal.
 
 No src/ module is modified. Every step calls the existing entrypoints -- which
 already accept splits=/model_path= and return metrics dicts -- and the MLflow
@@ -21,8 +21,9 @@ in the lc_default_risk experiment) and, in the calibrate/evaluate/fairness
 steps, reopen it by run_id to APPEND their metrics onto it.
 
 Every downstream metric describes the production model, so the lgbm_production
-run becomes the full archive (train AUC + calibration Brier + profit + fairness)
-while the lr_baseline run stays as the untouched comparison point.
+run becomes the full archive (train AUC + calibration Brier + profit + fairness
++ global SHAP importance) while the lr_baseline run stays as the untouched
+comparison point.
 
 Recency is sufficient for single-user local runs. A concurrent / multi-user
 setup would instead have train_and_save return its run_id directly (a src
@@ -38,6 +39,7 @@ from __future__ import annotations
 
 import math
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 # pipelines/ lives beside src/, not inside it. When Metaflow launches this file
@@ -109,6 +111,23 @@ def log_metrics_to_run(run_id: str, metrics: dict[str, float]) -> None:
             if value is None or (isinstance(value, float) and not math.isfinite(value)):
                 continue
             mlflow.log_metric(key, float(value))
+
+
+def log_params_to_run(run_id: str, params: dict[str, object]) -> None:
+    """
+    Append params to an existing run by reopening it by id -- the sibling of
+    log_metrics_to_run() for the CONFIGURATION behind a metric (which sample,
+    which seed, which scale), so a logged number stays interpretable and
+    reproducible rather than a bare float of unknown provenance.
+
+    MLflow lets a finished run be reactivated via start_run(run_id=...); logging
+    appends and the context manager re-closes it. Reopening a second time in the
+    same step (params here, metrics next) is the pattern the calibrate / evaluate
+    / fairness steps already use to append onto this run.
+    """
+    with mlflow.start_run(run_id=run_id):
+        for key, value in params.items():
+            mlflow.log_param(key, value)
 
 
 # --- Leakage-sentinel helpers ----------------------------------------------------
@@ -189,11 +208,85 @@ def fairness_scalars(result: dict) -> dict[str, float]:
     }
 
 
+# --- Explain-step helpers ------------------------------------------------------
+# global_importance() is an OBSERVABILITY signal, not a correctness gate, so the
+# explain step is fail-OPEN: a broken explainer must not throw away a run whose
+# model is already trained, calibrated, evaluated, and fairness-audited. These
+# three helpers carry that policy and are pure enough to unit-test without a
+# Metaflow run or a real shap install (see tests/test_training_flow.py).
+
+def importance_metrics(imp: pd.DataFrame) -> dict[str, float]:
+    """
+    global_importance()'s frame -> flat MLflow metrics keyed shap_importance_*.
+
+    `imp` has columns feature, mean_abs_shap (src/explain.py:614), one row per
+    model FEATURE, in CONTRIBUTION_SCALE = "log_odds_margin" units. Pure; it
+    imports no shap, so it stays testable on a hand-built frame.
+
+    The RANK of these importances is stable across sampling: seeds 42/7/99 at
+    n=4000, plus n=40000 and full Test (462,174 rows), all produce the identical
+    top-to-bottom order (re-measured 2026-07-11). The VALUES are NOT exact -- at
+    n=4000 the per-feature mean|SHAP| carries ~1-7% jitter across seeds (0.8% on
+    dti_n and purpose, up to 5.1% on emp_length_ord and 6.8% on
+    emp_length_missing, the two smallest). So log them, but do NOT compare
+    shap_importance_* run-over-run as though exact: the shap_sample_n and
+    shap_seed params the explain step logs are what make a given run's values
+    reproducible. Raise the sample, or run full Test (~33 s), if you ever need a
+    cross-run value comparison rather than a stable ranking.
+    """
+    return {
+        f"shap_importance_{row.feature}": float(row.mean_abs_shap)
+        for row in imp.itertuples(index=False)
+    }
+
+
+# The fail-OPEN allowlist for the explain step. Each member means "the model is
+# intact, the explainer just cannot run in this environment right now" -- never
+# "a wrong number was produced":
+#   ImportError  (incl. ModuleNotFoundError) -- shap uninstalled / a submodule
+#                moved; the explainer cannot even be constructed.
+#   MemoryError  -- the 4000 x trees SHAP matrix did not fit; a resource limit.
+#   OSError      (incl. FileNotFoundError, PermissionError) -- the artifact file
+#                could not be read this instant. A genuinely missing/corrupt
+#                artifact would already have hard-stopped the calibrate step (it
+#                loads through the same load_model_artifact), so at THIS step an
+#                OSError is a transient I/O race, not a real absence.
+# Everything NOT listed propagates and hard-stops the flow -- crucially
+# ValueError, which _assert_additivity raises on a bad ranking (src/explain.py:
+# 221): a wrong-but-numeric ranking is a correctness failure that must be neither
+# logged nor hidden. AttributeError / TypeError propagate too: a shap API drift
+# could surface as one, but so does an ordinary bug, and swallowing them would
+# silently blind the step. The boundary is drawn on an allowlist, not on
+# exception type, precisely because _assert_additivity and load_model_artifact
+# both raise a bare ValueError (src/explain.py:221, src/train.py:526).
+_EXPLAIN_SKIP_ERRORS = (ImportError, MemoryError, OSError)
+
+
+def guarded_importance(
+    compute: Callable[[], pd.DataFrame],
+) -> tuple[dict[str, float] | None, str | None]:
+    """
+    Run compute() -- which returns global_importance()'s frame -- and reduce it
+    to metrics, failing OPEN over _EXPLAIN_SKIP_ERRORS only.
+
+    Returns (metrics, None) on success, or (None, reason) when compute raised a
+    skip-class error, so the caller logs a visible SKIP and continues to end()
+    rather than letting the flow die for an explainability failure. Any other
+    exception -- the additivity ValueError above all -- propagates unchanged:
+    the inner fail-closed guard is not swallowed here.
+    """
+    try:
+        return importance_metrics(compute()), None
+    except _EXPLAIN_SKIP_ERRORS as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 # --- The flow ------------------------------------------------------------------
 
 class TrainingFlow(FlowSpec):
     """
-    Linear pipeline: load+split -> train -> calibrate -> evaluate -> fairness.
+    Linear pipeline: load+split -> train -> calibrate -> evaluate -> fairness
+    -> explain.
 
     self.splits is loaded ONCE in start() and reused by every downstream step
     (Metaflow pickles it into its datastore between steps). This is a few
@@ -342,6 +435,73 @@ class TrainingFlow(FlowSpec):
             self.eval_metrics["best_threshold"]
         )
         log_metrics_to_run(self.prod_run_id, self.fairness_metrics)
+        self.next(self.explain)
+
+    @step
+    def explain(self):
+        """
+        Log global SHAP importance (mean|SHAP|, log-odds) onto the unified
+        lgbm_production run, beside AUC / Brier / profit / fairness -- the "not
+        yet wired" observability signal from docs/design.md Section 4, now wired.
+
+        Observability, NOT a correctness gate. It reads self.model_path +
+        self.splits and writes NOTHING to self. Its failure is fail-OPEN
+        (guarded_importance): a broken explainer must not throw away a run whose
+        model is already trained, calibrated, evaluated, and fairness-audited.
+        The inner additivity guard inside global_importance stays fail-closed --
+        a wrong ranking raises, and that ValueError propagates (it is not in
+        _EXPLAIN_SKIP_ERRORS), so a wrong ranking is neither logged nor hidden.
+        """
+        configure_mlflow()
+
+        # `params` is filled INSIDE compute (below) and read back only after a
+        # clean success, so the reproducibility context is logged with -- never
+        # without -- the values it describes.
+        params: dict[str, object] = {}
+
+        def compute() -> pd.DataFrame:
+            # EVERY import of src.explain (which imports shap at module top) lives
+            # inside this guarded region, so a missing/moved shap becomes a logged
+            # SKIP -- ImportError is in _EXPLAIN_SKIP_ERRORS -- not a step crash.
+            import numpy as np
+
+            from src.explain import (
+                CONTRIBUTION_SCALE,
+                RANDOM_SEED,
+                SHAP_SAMPLE_N,
+                global_importance,
+            )
+
+            # Sample Test exactly as run_explanation does (src/explain.py:747-750)
+            # -- same seed and size -- so the logged ranking IS the documented one
+            # and shap_seed is a truthful param. ~0.4 s marginal: global_importance
+            # re-loads the artifact and builds its own explainer, and the
+            # additivity guard fires inside its _shap_matrix call.
+            test = self.splits["test"]
+            n = min(SHAP_SAMPLE_N, len(test))
+            idx = np.random.default_rng(RANDOM_SEED).choice(len(test), size=n, replace=False)
+            params.update(
+                shap_sample_n=n, shap_seed=RANDOM_SEED, shap_scale=CONTRIBUTION_SCALE,
+            )
+            return global_importance(test.iloc[idx], model_path=self.model_path)
+
+        metrics, skip_reason = guarded_importance(compute)
+        if skip_reason is not None:
+            print(f"explain SKIPPED (fail-open) -- {skip_reason}")
+            self.next(self.end)
+            return
+
+        log_params_to_run(self.prod_run_id, params)
+        log_metrics_to_run(self.prod_run_id, metrics)
+
+        print(
+            f"Global SHAP importance logged onto {self.prod_run_id} "
+            f"({params['shap_scale']}, n={params['shap_sample_n']:,}, "
+            f"seed={params['shap_seed']}):"
+        )
+        for key, value in metrics.items():
+            print(f"  {key:34} {value:.6f}")
+
         self.next(self.end)
 
     @step

@@ -809,3 +809,178 @@ the same historical-record reasoning as everywhere else in this file.
 **TODO:** none. If a future round wants `data-decisions.md`'s own historical
 `file.py:line` citations converted to symbols too, that would need a new
 append-only entry per citation, not an in-place edit -- not attempted here.
+
+---
+
+## The "move `dti_n` to the bureau" deferral has an unrecorded cost: `MockBureau.dti_n` is uniform over [0, 1000), and wiring it in silently feeds the model off-manifold DTI
+
+**Date:** 2026-07-12.
+
+**Context:** the deferral list (this file's "Phase 1 bureau wiring" entry, echoed
+in `docs/design.md` §5 and `docs/PROJECT_STATUS.md`) carries the one-liner "Move
+`dti_n` to the bureau -- Phase 1 moved only `fico_n`." Read cold, that scans as a
+mechanical next step: change `_to_raw_frame()` to take `dti_n` from the report
+instead of the request, done. It is not. This entry records the cost that
+one-liner does not carry, so the next person to pick it up does not discover it
+by shipping it.
+
+**Finding:** `MockBureau.fetch()` (`serving/bureau.py`) does not draw `dti_n` from
+anything resembling a real DTI distribution. It carves eight bytes out of the
+applicant_id's SHA-256 digest, divides by `2**64` to get a uniform draw in [0, 1),
+and multiplies by `DTI_MAX_REAL` -- so `dti_n` is uniform over [0, 1000).
+Measured over 20,000 synthetic applicant_ids:
+
+    min        0.01
+    median   499.48
+    mean     499.46
+    max      999.95
+
+    94.0% of draws exceed 60    (the top of the real LendingClub DTI band)
+    89.9% of draws exceed 100   (the ORIGINAL DTI_MAX_REAL, before it was widened)
+     0.0% of draws are the 999 sentinel
+
+Real `dti_n` in this dataset sits roughly 0-60. `DTI_MAX_REAL` is 1000 only
+because it was widened to admit a narrow anomalous tail -- see this file's "The
+495 rows with dti_n > 100" entry for that investigation. The mock's median
+applicant is therefore not a high-leverage borrower; it is a borrower who does
+not exist.
+
+(Note for anyone cross-checking: the 495 in that entry's title is a ROW COUNT,
+not a DTI value, and is unrelated to the ~499 median measured here. The
+near-collision is a coincidence, and it has already misled one reading of these
+two facts.)
+
+**Why this is harmless today, precisely:** `/score` never reads the mock's
+`dti_n`. `_to_raw_frame()` (`serving/app.py`) builds the model-input frame from
+`request.model_dump(exclude={"applicant_id"})` plus exactly one key taken from
+the pull, `"fico_n": report.fico_n`. `report.dti_n` is fetched, validated, and
+then never referenced -- `dti_n` reaches the model off the *request* object, from
+the applicant, where it has always come from. The Phase 1 wiring entry already
+records that `report.dti_n` is deliberately not merged. What was never recorded
+is that this omission is not merely tidy scoping: it is the only thing standing
+between the model and the numbers above.
+
+**The cost:** wire `report.dti_n` into `_to_raw_frame()` as the deferral reads,
+and the model immediately consumes DTI centered near 500. Nothing raises.
+
+- **Pydantic passes.** `CreditReport.dti_n` and `ScoreRequest.dti_n` share the
+  same band-or-sentinel rule, built from the same imported `DTI_MAX_REAL` /
+  `DTI_SENTINEL`. A draw of 499.48 is inside [0, 1000]. It is a *valid* value; it
+  is not a *plausible* one, and the schema was never asked to know the difference.
+- **The additivity guard passes.** `_assert_additivity` (`src/explain.py`) checks
+  that the SHAP contributions reconstruct the model's margin to
+  `ADDITIVITY_ATOL`. That is a statement about the arithmetic, not about the
+  input: the explanation of a nonsense score is still a correct explanation of
+  that score. The math stays exact all the way down.
+- **The drift monitor is not in the path.** `pipelines/drift_check.py` is a manual
+  entry point, not an inline gate on `/score`, and it reports rather than raises.
+
+The failure is silent by construction: every guard this repo owns is a guard on
+*correctness*, and every one of them would be satisfied. The service would return
+well-formed, additive, fully-explained decisions computed from an input
+distribution the model has never seen. That -- a confident wrong answer with no
+alarm attached -- is the exact failure mode the rest of this project exists to
+make impossible, and the deferral list currently invites it in one line.
+
+**What the deferral actually requires: two preconditions, not one.**
+
+1. **A realistic `dti_n` distribution in `MockBureau`.** Uniform[0, 1000) cannot be
+   wired in. Whatever replaces it will be an armchair number and must be disclosed
+   as one, exactly as `MockBureau`'s own docstring already discloses that
+   `mean_fico=700.0` / `std_fico=50.0` are demo assumptions not measured from any
+   dataset in this repo.
+2. **A path that can emit the 999 sentinel.** This is not a new requirement -- it is
+   the *original* reason `dti_n` was deferred. The Phase 1 wiring entry states it:
+   `MockBureau.fetch()` never produces the sentinel, so moving `dti_n` to the bureau
+   would make the sentinel-handling contract untestable at the HTTP boundary without
+   also extending `MockBureau` to simulate sentinel-producing applicants. The 0.0%
+   sentinel rate measured above confirms that still holds.
+
+These are the same deferral's two halves, and they were being tracked as one
+sentence and zero sentences respectively. Both are the same kind of gap:
+`MockBureau` can produce neither a realistic DTI nor a missing one.
+
+**Disposition:** no code changed. `dti_n` stays applicant-reported; the deferral
+stays deferred, and stays correct to have deferred. What changes is that it is no
+longer a one-liner -- it is a deferral with a recorded cost and two named
+preconditions, so shipping it without both is now a documented mistake rather
+than an available one.
+
+**TODO:** when `dti_n` does move to the bureau, both preconditions land in the same
+round as the `_to_raw_frame()` change -- never before it. A `MockBureau` that
+returns uniform[0, 1000) `dti_n` must not be reachable from `/score` in any
+intermediate commit.
+
+---
+
+## Why "serving never reaches `matplotlib`" was false, and why grep could not catch it
+
+**Date:** 2026-07-12.
+
+**Context:** commit `3e612cb` corrected a false claim that had been written into
+three places at once (`pyproject.toml`'s dependency comments, `docs/design.md` §4,
+and `README.md`'s serving-layer section): that serving's import graph never reaches
+any of the four training-only packages (`mlflow`, `metaflow`, `matplotlib`,
+`seaborn`). Three of the four are genuinely unreached. `matplotlib` is reached. The
+corrected prose now says so. This entry records the *method* -- why the claim was
+wrong, and why the obvious check certifies it as right -- because the conclusion is
+a fact about one package on one day, while the method is the part that stops the
+next person from re-deriving the same false claim the same way.
+
+**The trap:** the claim was not lazy. It survives the check almost anyone would run:
+
+    $ grep -rn "import matplotlib" serving/
+    $ grep -rni "matplotlib" serving/
+    $
+
+Both are empty. `serving/` genuinely never writes that import, and the string
+"matplotlib" does not occur anywhere in the package. A grep-based audit therefore
+"confirms" that serving is matplotlib-free -- and is wrong.
+
+**The truth:** the import is transitive and exception-guarded. `serving/artifacts.py`
+imports `lightgbm`; lightgbm's `compat` module (third-party, in site-packages) runs
+this at import time, setting its `MATPLOTLIB_INSTALLED` flag:
+
+    try:
+        import matplotlib
+        MATPLOTLIB_INSTALLED = True
+    except ImportError:
+        MATPLOTLIB_INSTALLED = False
+
+So `import serving.app` really does execute `import matplotlib`. Nothing in this
+repo asked for it and no string in this repo names it -- and because the import is
+wrapped in `try`/`except`, its *absence* is equally invisible: the guard swallows
+the `ImportError` and sets a flag. The import is real, silent when present, and
+silent when missing.
+
+**The only reliable check is runtime module inspection, not static grep:**
+
+    $ python -c "import serving.app, sys; print({m: (m in sys.modules) for m in ['mlflow','metaflow','seaborn','matplotlib']})"
+    {'mlflow': False, 'metaflow': False, 'seaborn': False, 'matplotlib': True}
+
+That one line is what surfaced the error. It is also the check that must be re-run
+to defend any future claim of this shape.
+
+**The slimming decision itself was correct, and stands.** This entry is not "the
+image was built wrong" -- it was not. Precisely because lightgbm's import is
+guarded, `matplotlib`'s absence from the slim image is *tolerated*:
+`MATPLOTLIB_INSTALLED` becomes `False`, lightgbm's plotting helpers are disabled,
+and nothing on the scoring path touches them. Excluding `matplotlib` from the
+runtime image via the `training` dependency group remains right, and the 2.64GB ->
+937MB result (this file's Phase 2 entry) is unaffected. What was wrong was the
+*stated reason*: the four packages were grouped as "never reached," when the honest
+grouping is **three never reached, one reached and tolerated**. The decision was
+right and the justification was untrue, and this repo's thesis is that the second
+one still matters when the first one holds.
+
+**The rule, generalized:** any claim of the form "serving's import graph does not
+reach package X" must be verified by post-import `sys.modules` inspection, never by
+grepping for `import X`. A transitive, exception-guarded import is invisible to grep
+(no first-party source names it) *and* invisible to a smoke test (the guard swallows
+the failure), yet it is real -- and in a slim-image argument it is exactly the case
+that decides whether the argument is true. Grep proves what this repo's own code
+says. Only the interpreter knows what it actually imports.
+
+**TODO:** none; this is a verification-method record. The three-unreached /
+one-tolerated split is stated in `pyproject.toml`, `docs/design.md` §4, and
+`README.md` as of `3e612cb`.

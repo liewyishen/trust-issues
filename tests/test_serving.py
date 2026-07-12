@@ -332,7 +332,7 @@ def test_unknown_home_ownership_is_422(client):
 
 # ---------------------------------------------------------------------------
 # 6. Missing field -> 422. Extra field -> 422. The second is the deliberate
-#    asymmetry with LOAN_SCHEMA's strict=False (data_validation.py:186).
+#    asymmetry with LOAN_SCHEMA's strict=False (data_validation.py).
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("dropped", sorted(GOOD))
 def test_missing_field_is_422(client, dropped):
@@ -462,7 +462,7 @@ def test_matching_calibrator_does_not_raise(model_path, calibrator_path):
 #     produce a 500, never a 200 with a decision.
 #
 #     This is what proves score() did not take explain_applicants()'s
-#     precomputed escape hatch (explain.py:470), which skips _shap_matrix and
+#     precomputed escape hatch (explain.py), which skips _shap_matrix and
 #     therefore skips _assert_additivity entirely.
 # ---------------------------------------------------------------------------
 _REAL_TREE_EXPLAINER = shap.TreeExplainer
@@ -527,8 +527,8 @@ def test_without_the_guard_the_same_corruption_returns_a_wrong_decision(client, 
 # ---------------------------------------------------------------------------
 # 12. No explainer is cached. One construction per request.
 #
-#     expected_value is instance state mutated by shap_values()
-#     (_tree.py:615). The hazard is invisible to a single-threaded test client,
+#     expected_value is instance state mutated by shap_values() (inside
+#     TreeExplainer.shap_values). The hazard is invisible to a single-threaded test client,
 #     so the construction COUNT is the only thing that can hold this decision
 #     in place against a future "obvious" optimization.
 # ---------------------------------------------------------------------------

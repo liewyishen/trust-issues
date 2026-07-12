@@ -614,8 +614,9 @@ def test_shap_matrix_raises_loudly_on_an_unrecognized_base_size():
 
 # ---------------------------------------------------------------------------
 # 13. The additivity guard is ARMED. shap's own check_additivity=True is inert
-#     on the LightGBM branch -- model_output_vals stays None (_tree.py:556) so
-#     the guard at _tree.py:618 never fires -- which means, until this test,
+#     on the LightGBM branch -- model_output_vals stays None inside
+#     TreeExplainer.shap_values, so its check_additivity guard never fires --
+#     which means, until this test,
 #     NOTHING verified that the contributions being ranked into an
 #     adverse-action notice describe the margin the applicant was scored on.
 #     _shap_matrix now checks it itself, fail-closed. Both sides, on a real
@@ -670,7 +671,8 @@ def test_shap_check_additivity_is_inert_on_lightgbm(applicants, artifact):
     """The premise of the guard above, pinned so it cannot rot silently.
 
     If a future shap version starts populating model_output_vals on the
-    LightGBM branch (_tree.py:556) and this call begins raising, then shap has
+    LightGBM branch (inside TreeExplainer.shap_values) and this call begins
+    raising, then shap has
     started doing the check itself and _assert_additivity's rationale needs
     rereading. Until then: a frame whose fico_n is entirely NaN sails through
     shap_values(check_additivity=True) without complaint."""
@@ -717,11 +719,11 @@ def test_unseen_category_keeps_its_human_readable_value(
 # 15. TreeExplainer is a WRAPPER over booster.predict(pred_contrib=True), on
 #     the SHIPPED artifact.
 #
-#     For a LightGBM booster with no background data, shap's fast path
-#     (_tree.py:551-555) computes nothing itself: it forwards to
-#     `original_model.predict(X, num_iteration=tree_limit, pred_contrib=True)`
-#     (_tree.py:580), keeps the last column as expected_value (_tree.py:615),
-#     and returns the rest (_tree.py:616). The 65 ms TreeExplainer construction
+#     For a LightGBM booster with no background data, shap's fast path (inside
+#     TreeExplainer.shap_values) computes nothing itself: it forwards to
+#     `original_model.predict(X, num_iteration=tree_limit, pred_contrib=True)`,
+#     keeps the last column as expected_value, and returns the rest (all three
+#     inside TreeExplainer.shap_values). The 65 ms TreeExplainer construction
 #     parses the booster into arrays this path never reads.
 #
 #     Nothing in this repo pinned that. It is the load-bearing premise of any
@@ -766,7 +768,8 @@ def test_shap_values_equals_pred_contrib_on_the_shipped_artifact(applicants):
     # The contributions are the same objects, not merely close.
     assert np.array_equal(phi[:, :-1], sv)
 
-    # expected_value is literally phi[0, -1] -- _tree.py:615 assigns it there.
+    # expected_value is literally phi[0, -1] -- TreeExplainer.shap_values
+    # assigns it there.
     assert float(post_call) == float(phi[0, -1])
 
     # The mutation is a TYPE change, not a value change: a length-1 ndarray

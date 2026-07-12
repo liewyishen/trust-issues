@@ -1,7 +1,7 @@
 """
 The request contract and the response contract.
 
-The request contract is NOT LOAN_SCHEMA. LOAN_SCHEMA (data_validation.py:114-188)
+The request contract is NOT LOAN_SCHEMA. LOAN_SCHEMA (data_validation.py)
 is the TRAINING contract: it requires `Default` and `addr_state` as non-nullable
 columns, and a live request has neither. It is correct as it is and is not
 touched. What the two share -- every bound, every category set -- is IMPORTED
@@ -30,12 +30,12 @@ from src.features import emp_order
 # ---------------------------------------------------------------------------
 # EMP_LENGTH_NOT_DISCLOSED -- the string the training data uses for "declined to
 # disclose". add_features() keys emp_length_missing off this exact value
-# (features.py:118: `out["emp_length"].eq("NI")`).
+# (features.py's add_features(): `out["emp_length"].eq("NI")`).
 # ---------------------------------------------------------------------------
 EMP_LENGTH_NOT_DISCLOSED = "NI"
 
 # The closed set of emp_length values the model was fit on: the eleven ordinal
-# strings in features.emp_order (features.py:24-28) plus "NI". Measured against
+# strings in features.emp_order (features.py) plus "NI". Measured against
 # Train (n=453,804): exactly 12 distinct values, zero nulls.
 VALID_EMP_LENGTH: frozenset[str] = frozenset(emp_order) | {EMP_LENGTH_NOT_DISCLOSED}
 
@@ -101,7 +101,7 @@ class ScoreRequest(BaseModel):
     Two deliberate asymmetries with LOAN_SCHEMA:
 
     1. `extra="forbid"`, where LOAN_SCHEMA sets strict=False
-       (data_validation.py:186). A training frame legitimately carries id,
+       (data_validation.py). A training frame legitimately carries id,
        issue_d, zip_code. A REQUEST that carries an unrecognized field is a
        client that believes it is sending something the model reads. It is
        not -- and as of the bureau wiring, this now also catches a client
@@ -110,12 +110,13 @@ class ScoreRequest(BaseModel):
        and a client-submitted value would silently go nowhere.
 
     2. An unseen `purpose` is rejected, where _to_lgb_frame degrades it to NaN
-       and scores it (model_io.py:103-111, which calls that degradation
-       deliberate: "a malformed/missing feature value at inference time
-       shouldn't take down serving"). This overrides that, at the HTTP boundary
-       only, on the following grounds. purpose in training is nullable=False,
-       isin(VALID_PURPOSE) (data_validation.py:169-173), and category_maps is
-       derived from Train alone (model_io.py:84-96). No training row therefore
+       and scores it (model_io.py's _to_lgb_frame, whose docstring calls that
+       degradation deliberate: "a malformed/missing feature value at inference
+       time shouldn't take down serving"). This overrides that, at the HTTP
+       boundary only, on the following grounds. purpose in training is
+       nullable=False, isin(VALID_PURPOSE) (LOAN_SCHEMA's purpose Column,
+       data_validation.py), and category_maps is derived from Train alone
+       (model_io.py's _train_categories). No training row therefore
        encodes purpose as NaN, so LightGBM's NaN bin for that column received
        zero training rows. Scoring an unseen purpose is not graceful
        degradation; it is a well-formed float from an untrained branch.
@@ -147,7 +148,7 @@ class ScoreRequest(BaseModel):
     @classmethod
     def _dti_in_band_or_sentinel(cls, v: float) -> float:
         """
-        Mirrors LOAN_SCHEMA's dti_n check (data_validation.py:123-137).
+        Mirrors LOAN_SCHEMA's dti_n Column check (data_validation.py).
 
         The OR is numerically redundant -- 999 <= 1000 -- and kept explicit for
         the same reason it is kept explicit there: 999 is a missing-value
@@ -195,10 +196,10 @@ class ScoreRequest(BaseModel):
 
 class ReasonCode(BaseModel):
     """
-    One principal adverse factor, as _rank_adverse emits it (explain.py:369-375).
+    One principal adverse factor, as _rank_adverse emits it (explain.py).
 
     `value` is a string for every feature, including numeric ones: _rank_adverse
-    writes `str(v)` at explain.py:373. An "NI" applicant's emp_length_ord
+    writes `str(v)` into the dict it returns. An "NI" applicant's emp_length_ord
     therefore arrives as the string "nan", not as a float NaN, and no NaN ever
     reaches the JSON encoder -- which is fortunate, because JSON has no NaN
     literal. This model does not "fix" that by retyping the field; it records
@@ -208,7 +209,7 @@ class ReasonCode(BaseModel):
     probability axis. See ScoreResponse.
     """
 
-    rank: int          # 1-based (explain.py:375, enumerate(..., start=1))
+    rank: int          # 1-based (_rank_adverse's enumerate(..., start=1))
     feature: str
     value: str
     contribution_log_odds: float
@@ -216,7 +217,7 @@ class ReasonCode(BaseModel):
 
 class ScoreResponse(BaseModel):
     """
-    Mirrors explain_applicants()'s dict key-for-key (explain.py:443-458), plus
+    Mirrors explain_applicants()'s returned dict key-for-key (explain.py), plus
     three bureau-provenance fields (bureau, fico_version,
     credit_report_pulled_at) that /score fills in from the CreditReport it
     fetched -- explain_applicants() knows nothing about the bureau layer and

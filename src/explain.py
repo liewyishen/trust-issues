@@ -11,7 +11,7 @@ Three things this module does that those cells did not:
     model at a fixed num_boost_round and scores it with no num_iteration
     argument at all, so none of its numbers are reproducible from what is on
     disk. This module loads models/lgbm_model.pkl through
-    train.load_model_artifact() (fail-closed on the feature contract) and
+    model_io.load_model_artifact() (fail-closed on the feature contract) and
     models/isotonic_calibrator.pkl through calibrate.load_calibrator() with
     model_artifact= passed (fail-closed on a stale calibrator binding). It
     never calls lgb.train. Since features.py's INCLUDE_ADDR_STATE is False,
@@ -148,9 +148,9 @@ SHAP_SAMPLE_N = 4000
 # model's, or a change in shap's return contract. Those all land at O(0.1) or
 # worse, not O(1e-15).
 #
-# For contrast, shap's own assert_additivity uses atol=1e-2, rtol=1e-2
-# (_tree.py:845) -- thirteen orders looser, and on the LightGBM path it never
-# runs at all. See _shap_matrix.
+# For contrast, shap's own assert_additivity uses atol=1e-2, rtol=1e-2 (inside
+# TreeExplainer.assert_additivity's nested check_sum) -- thirteen orders looser,
+# and on the LightGBM path it never runs at all. See _shap_matrix.
 # ---------------------------------------------------------------------------
 ADDITIVITY_ATOL = 1e-9
 
@@ -198,8 +198,8 @@ def _assert_additivity(
     check, and silently half-checking is worse than a clean skip.
 
     `num_iteration=tree_limit` mirrors exactly what shap forwards to LightGBM
-    (_tree.py:580), so the margin compared against is the margin of the same
-    trees that were explained.
+    (inside TreeExplainer.shap_values), so the margin compared against is the
+    margin of the same trees that were explained.
 
     Raises
     ------
@@ -295,14 +295,15 @@ def _shap_matrix(
     Passing it explicitly removes the precondition instead of testing for it.
 
     shap's `check_additivity` VERIFIES NOTHING HERE, despite defaulting to
-    True. Inside the LightGBM fast path (_tree.py:551-555) `model_output_vals`
-    is left at None (_tree.py:556) -- only the xgboost branch ever assigns it
-    (_tree.py:573-576) -- so the guard
+    True. Inside `TreeExplainer.shap_values`'s LightGBM fast path
+    `model_output_vals` is left at None -- only the xgboost branch ever assigns
+    it (both inside `TreeExplainer.shap_values`) -- so the guard
 
-        if check_additivity and model_output_vals is not None:   # _tree.py:618
+        if check_additivity and model_output_vals is not None:
             self.assert_additivity(out, model_output_vals)
 
-    is short-circuited on every call this repo makes. Demonstrated, not
+    (also inside `TreeExplainer.shap_values`) is short-circuited on every call
+    this repo makes. Demonstrated, not
     inferred: a frame with fico_n set to all-NaN passes
     `shap_values(..., check_additivity=True)` without raising. This docstring
     previously claimed shap performed the check "for free"; it never did.
@@ -559,7 +560,8 @@ def explain_applicants(
     # base + sum(contributions) IS the raw margin, because tree_path_dependent
     # SHAP is exactly additive. That identity is the one shap's
     # check_additivity=True is widely believed to guarantee and does not -- it
-    # is inert on the LightGBM branch (_tree.py:556; see _shap_matrix). What
+    # is inert on the LightGBM branch (model_output_vals stays None inside
+    # TreeExplainer.shap_values; see _shap_matrix). What
     # actually enforces it depends on which path reached this line:
     #   - loading path: _shap_matrix just proved it, via _assert_additivity,
     #     against booster.predict(raw_score=True).

@@ -35,25 +35,27 @@ class ArtifactBundle:
         shap.TreeExplainer(booster)      66.97 ms min / 70.25 ms median
 
     Caching it would be the obvious win, and it is not taken. shap_values()
-    OVERWRITES explainer.expected_value as a side effect of the call
-    (shap/explainers/_tree.py:615), and _shap_matrix reads that attribute AFTER
-    the call, never before (explain.py:243-336). A cached explainer is
+    OVERWRITES explainer.expected_value as a side effect of the call (inside
+    shap's TreeExplainer.shap_values), and _shap_matrix reads that attribute
+    AFTER the call, never before (explain.py). A cached explainer is
     therefore shared mutable state whose base value depends on whoever called
-    it last. Under concurrency, request A's write at _tree.py:615 can land
+    it last. Under concurrency, request A's write inside
+    TreeExplainer.shap_values can land
     between request B's shap_values() call and B's read of expected_value,
     handing B a wrong base_value_log_odds and a wrong raw_margin_log_odds --
     with no exception raised, because the arithmetic is still valid, merely
     about the wrong applicant.
 
     67 ms per request buys statelessness. See _get_explainer's docstring
-    (explain.py:214-241) and docs/explainability.md Section 10, which records
+    (explain.py) and docs/explainability.md Section 10, which records
     the pred_contrib migration that would remove the cost entirely and is
     deliberately not done.
     ------------------------------------------------------------------------
 
     The paths are carried because explain_applicants() has no parameter for
     "use this already-loaded artifact": it gates ALL artifact loading on the
-    precomputed escape hatch being fully supplied (explain.py:470), so passing
+    precomputed escape hatch being fully supplied (explain_applicants()'s
+    all-or-nothing hatch check, explain.py), so passing
     only `explainer=` still re-reads both pickles from disk. Using the escape
     hatch instead would mean reimplementing _to_lgb_frame + _shap_matrix +
     apply_calibration here AND bypassing _assert_additivity, which lives inside
@@ -81,7 +83,8 @@ def _assert_serving_enums_match_artifact(category_maps: dict[str, pd.Index]) -> 
 
     schema.py validates `purpose` and `home_ownership_n` against
     data_validation's VALID_PURPOSE / VALID_HOME_OWNERSHIP. The model was fit
-    against category_maps, derived from Train alone (model_io.py:84-96). Those
+    against category_maps, derived from Train alone (model_io.py's
+    _train_categories). Those
     are two independent sources of truth for the same list, and nothing has
     ever compared them. Today they agree exactly -- 14 purposes and 4 ownership
     values, verified by run. That agreement is a property of the current
@@ -120,9 +123,9 @@ def load_bundle(
 
     Three gates, none of them new:
 
-      load_model_artifact (model_io.py:323)  raises if the packaged FEATURES /
+      load_model_artifact (model_io.py)  raises if the packaged FEATURES /
           CATEGORICAL differ from what features.py declares now.
-      load_calibrator (calibrate.py:56)   raises if the calibrator was fit
+      load_calibrator (calibrate.py)   raises if the calibrator was fit
           against a different model instance (trained_at mismatch).
       _assert_serving_enums_match_artifact  raises if the request schema's
           category sets differ from the model's.

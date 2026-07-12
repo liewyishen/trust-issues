@@ -48,7 +48,7 @@ def _to_raw_frame(request: ScoreRequest, report: CreditReport) -> pd.DataFrame:
 
     Double brackets, not a Series: add_features() calls .map()/.eq() on columns
     and _to_lgb_frame() assigns pd.Categorical into columns, so a Series will
-    not work (explain.py:394-396).
+    not work (explain_applicants()'s docstring, explain.py).
 
     The result carries exactly the seven raw fields the RAW schema expects
     (revenue, dti_n, loan_amnt, fico_n, emp_length, purpose,
@@ -169,7 +169,7 @@ def create_app(
         Phase 1 bureau-wiring entry.
 
         `explainer=` is deliberately NOT passed. explain_applicants() forwards
-        None to _get_explainer (explain.py:214), which then constructs a fresh
+        None to _get_explainer (explain.py), which then constructs a fresh
         shap.TreeExplainer on the booster it just loaded -- ~67 ms, per request,
         never shared. Passing bundle's booster's explainer would both defeat
         that and build the explainer on a different Booster object than the one
@@ -180,8 +180,8 @@ def create_app(
         which is the literal 0.25 and is a different float.
 
         max_reasons is left at DEFAULT_MAX_REASONS (4). That number is
-        inherited from the notebook and is not ours to fix; see its comment at
-        explain.py:121-128.
+        inherited from the notebook and is not ours to fix; see
+        DEFAULT_MAX_REASONS's own comment in explain.py.
         """
         report = bureau.fetch(applicant.applicant_id)
 
@@ -193,7 +193,7 @@ def create_app(
                 threshold=bundle.threshold,
             )
         except ValueError:
-            # _assert_additivity (explain.py:158) is the case this catches:
+            # _assert_additivity (explain.py) is the case this catches:
             # the explanation does not reconstruct the score. Log everything,
             # return nothing. A decision without a valid explanation is worse
             # than no decision.

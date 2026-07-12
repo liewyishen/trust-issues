@@ -84,6 +84,15 @@ Depth: [`data-decisions.md`](data-decisions.md) (data quality, fairness);
   dependency group the Docker build excludes; the serving image measured **2.64GB →
   937MB**. This is a change to what ships in the image, not a change to the bullet above —
   serving still is not deployed anywhere.
+- **Three of those four are unreached; `matplotlib` is reached and tolerated.** The
+  grouping above is correct, but the reason first written down for it was not, and the
+  runtime check is what caught that. `mlflow`, `metaflow` and `seaborn` are genuinely
+  absent from `sys.modules` after `import serving.app`. `matplotlib` is not:
+  `serving/artifacts.py` imports `lightgbm`, and LightGBM's compat module imports
+  `matplotlib` on the way in, so serving's import graph *does* reach it. Leaving it out of
+  the image is still safe — LightGBM guards that import (`try` / `except ImportError`,
+  setting `MATPLOTLIB_INSTALLED = False`), so it degrades instead of failing. The accurate
+  claim is **tolerated, not unreached**, and the two are not the same sentence.
 - **`drift_check.py` is a manual entry point**, not a scheduled job — no CI, no cron,
   no scheduler exists here. It reports; it does not raise (`fail_on_alarm=False`).
 - **`SHAP_SAMPLE_N = 4000`** is inherited from the notebook, with no stated rationale

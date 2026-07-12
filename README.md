@@ -200,6 +200,17 @@ dependency group the Docker build excludes (`uv sync --no-dev --no-group trainin
 serving image measured **2.64GB → 937MB**. This changes what ships in the image, not
 whether anything is deployed — see the paragraph above.
 
+Three of those four packages are genuinely unreachable from serving. `matplotlib` is not,
+and the same runtime check is what caught it: `mlflow`, `metaflow` and `seaborn` are absent
+from `sys.modules` after `import serving.app`, but `matplotlib` is *present* — `serving/`
+imports `lightgbm`, and LightGBM's compat module imports `matplotlib` on the way in.
+Excluding it from the image is still correct, because LightGBM wraps that import in
+`try` / `except ImportError` and degrades to no-plotting rather than failing. So the honest
+statement is that serving **tolerates** `matplotlib`'s absence, not that it never reaches
+it. The image is unchanged by this; only the sentence describing it is. Writing "never
+reaches any of the four" would have been the same class of untrue-but-flattering claim this
+project exists to catch, so it is written the long way instead.
+
 ---
 
 ## Tech stack

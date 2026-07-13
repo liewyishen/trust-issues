@@ -523,3 +523,163 @@ class DriftResponse(BaseModel):
     thresholds: dict[str, float]
     alarms: list[str]
     metrics: dict[str, float]
+
+
+# ---------------------------------------------------------------------------
+# GET /fairness -- the frozen three-layer audit (scripts/audit_fairness.py).
+#
+# Every field below is a key that already exists in models/fairness_audit.json,
+# which is itself a re-keying of src/fairness.py's real output. Nothing here is
+# invented, and nothing here is computed: serving/fairness.py opens a file and
+# checks one provenance field. The audit needs the 167 MB assessment CSV and
+# ~40s, so it runs OFFLINE -- see serving/fairness.py's docstring for why this
+# is an artifact rather than a live route like /drift.
+# ---------------------------------------------------------------------------
+class AuditedModel(BaseModel):
+    """Which model the audit actually ran against."""
+
+    # THE binding field. serving/fairness.py compares this against the shipped
+    # bundle's model_trained_at and 409s on mismatch, the same way
+    # load_calibrator() refuses a calibrator fit against another booster.
+    trained_at: str | None
+    calibrator_trained_at: str | None
+    best_iteration: int
+
+    # The fairness conclusion, made checkable rather than asserted in prose:
+    # the shipped model does not carry addr_state.
+    features: list[str]
+    includes_addr_state: bool
+
+
+class AuditConstants(BaseModel):
+    """src/fairness.py's own constants, shipped so a client never guesses one."""
+
+    eo_threshold: float          # EO_THRESHOLD -- the 0.80 rule
+    min_n: int                   # MIN_N -- states below this are not reported
+    n_boot: int                  # N_BOOT -- bootstrap resamples behind every CI
+    sweep_thresholds: list[float]
+    ablation_threshold: float    # ABLATION_THRESHOLD -- 0.22, NOT the operating point
+    watch_states: list[str]
+
+
+class StateEO(BaseModel):
+    """One state's Equal-Opportunity ratio, with the interval around it."""
+
+    state: str
+    n_good: int
+    eo_ratio: float
+    ci_low: float
+    ci_high: float
+    verdict: str
+
+
+class Layer1(BaseModel):
+    """The SHIPPED model, audited at the threshold /score actually decides at."""
+
+    threshold: float
+    states: list[StateEO]
+    n_confirmed: int
+
+
+class Layer2(BaseModel):
+    """
+    The threshold sweep.
+
+    `rows` is left as loose dicts on purpose: each row is
+    {threshold, national_good_approval_rate, **one key per watch state}, so its
+    key set is DERIVED from constants.watch_states. Typing the watch states as
+    named fields here would hard-code MS/AL/TN/NV/NE/FL into the serving layer
+    and silently drop a column the day src/fairness.py's WATCH_STATES changes.
+    """
+
+    rows: list[dict[str, float]]
+
+
+class AblationStateCI(BaseModel):
+    """
+    One state on BOTH sides of the ablation, each side with a bootstrap CI.
+
+    This is the pair src/fairness.py could not report until Layer 3 started
+    returning its two Test frames: the same applicants, the same outcomes, one
+    feature toggled, and an interval on each side so the shift can be told
+    apart from sampling noise.
+
+    n_good_* is identical on both sides by construction (same Test set, same
+    y_true) and is carried twice because that is what the merge produces --
+    which makes it a free invariant a client can check rather than trust.
+    """
+
+    state: str
+    n_good_with_state: int
+    eo_ratio_with_state: float
+    ci_low_with_state: float
+    ci_high_with_state: float
+    verdict_with_state: str
+    n_good_no_state: int
+    eo_ratio_no_state: float
+    ci_low_no_state: float
+    ci_high_no_state: float
+    verdict_no_state: str
+
+
+class AblationWatchState(BaseModel):
+    """src/fairness.py's own Layer-3 verdict row, unedited.
+
+    Kept alongside `states` rather than merged into it because this verdict is
+    decided on POINT ESTIMATES (`eo_with_state < EO_THRESHOLD`), while
+    AblationStateCI carries the intervals. The two can honestly disagree, and
+    on the real data they do: NV is "was already clear" here on eo_with_state =
+    0.800147 -- a verdict turning on the fourth decimal -- while its CI
+    [0.7823, 0.8183] straddles 0.80 and is properly "inconclusive". Shipping
+    both is what lets a client show that, instead of picking whichever reads
+    better.
+    """
+
+    state: str
+    eo_with_state: float
+    eo_no_state: float
+    shift: float
+    verdict: str
+
+
+class Layer3(BaseModel):
+    """The counterfactual: a with-state model and a no-state model, retrained."""
+
+    threshold: float
+    auc_with_state: float
+    auc_no_state: float
+    auc_cost: float
+    base_approval_with_state: float
+    base_approval_no_state: float
+    watch: list[AblationWatchState]
+    states: list[AblationStateCI]
+
+
+class FairnessResponse(BaseModel):
+    """
+    The frozen audit, plus the proof it is about the model being served.
+
+    `shipped_model_trained_at` is NOT from the artifact -- it is read off the
+    live ArtifactBundle at request time. It is echoed next to
+    `model.trained_at` so a client can SEE the two agree rather than infer it
+    from the absence of a 409. The service already refuses to send this
+    response at all when they differ (serving/fairness.py's is_stale); this
+    field is what makes that check visible instead of merely trustworthy.
+    """
+
+    schema_version: int
+    generated_at: str
+
+    model: AuditedModel
+    shipped_model_trained_at: str | None
+
+    constants: AuditConstants
+    layer1: Layer1
+    layer2: Layer2
+    layer3: Layer3
+
+    # `model` is a field name here, and pydantic reserves the `model_` prefix
+    # for its own API. This turns off the resulting warning WITHOUT renaming
+    # the field, because the artifact's key is "model" and the schema must
+    # mirror the artifact rather than the other way round.
+    model_config = ConfigDict(protected_namespaces=())

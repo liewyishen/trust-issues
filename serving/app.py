@@ -1,5 +1,5 @@
 """
-The HTTP boundary. Four routes, one adapter function, no scoring logic.
+The HTTP boundary. Five routes, one adapter function, no scoring logic.
 
     GET  /healthz     readiness, plus the identity of what is loaded
     GET  /calibrator  the shipped calibrator's own shape, off the loaded bundle
@@ -29,10 +29,21 @@ from serving.errors import (
     ARTIFACTS_UNAVAILABLE_DETAIL,
     BUREAU_UNAVAILABLE_DETAIL,
 )
+# serving/fairness.py opens a JSON file and compares one string. It imports
+# nothing from src/fairness.py, pipelines/ or scripts/ -- the audit itself needs
+# the assessment CSV and ~40s, and neither belongs anywhere near this process.
+# The import-graph guard in tests/test_serving.py covers this line too.
+from serving.fairness import (
+    FairnessAudit,
+    audit_model_trained_at,
+    is_stale,
+    load_fairness_audit,
+)
 from serving.schema import (
     CalibratorResponse,
     DriftRequest,
     DriftResponse,
+    FairnessResponse,
     HealthResponse,
     ScoredCreditReport,
     ScoreRequest,
@@ -199,6 +210,7 @@ def create_app(
     bundle: ArtifactBundle | None = None,
     bureau: CreditBureau | None = None,
     drift_demo: bool = DRIFT_DEMO_AVAILABLE,
+    audit: FairnessAudit | None = None,
 ) -> FastAPI:
     """
     Build the app. Pass `bundle`/`bureau` to inject pre-built ones and skip
@@ -214,7 +226,15 @@ def create_app(
     explicitly to force either way; passing True where the machinery is missing
     raises at construction, which is the intended failure (a 404 would be the
     service quietly disagreeing with the caller about what it is).
+
+    `audit` is the frozen fairness audit backing GET /fairness. It is READ HERE,
+    once, rather than per request -- but unlike the bundle it is deliberately
+    NOT fail-closed: load_fairness_audit() never raises, it reports (see
+    serving/fairness.py). A missing or corrupt reporting artifact must not stop
+    the service scoring applicants. Tests inject a stale or absent one to
+    exercise the 409 / 404 paths without touching the file on disk.
     """
+    audit = audit if audit is not None else load_fairness_audit()
     app = FastAPI(
         title="trust-issues credit scoring",
         description=(
@@ -279,6 +299,68 @@ def create_app(
             n_knots=len(cal.X_thresholds_),
             n_distinct_y=len(set(y)),
             threshold=bundle.threshold,
+        )
+
+    @app.get("/fairness", response_model=FairnessResponse)
+    async def fairness(
+        bundle: ArtifactBundle = Depends(get_bundle),
+    ) -> FairnessResponse:
+        """
+        The frozen three-layer audit -- but only if it is about THIS model.
+
+        Unlike /drift, this route computes nothing and wraps nothing. The audit
+        needs the 167 MB assessment CSV (the first line of .dockerignore,
+        because the brief forbids redistributing it) and ~40s of retraining, so
+        it runs offline in scripts/audit_fairness.py and freezes ~35 KB of
+        derived ratios. This route opens that file. See serving/fairness.py.
+
+        Two ways it declines, and neither of them invents a number:
+
+          404  There is no audit artifact here. The body carries the reason
+               (absent / unreadable / unknown schema_version), so a human can
+               tell those apart, and no failure of a REPORTING artifact can
+               take /score down with it -- the audit is blue in
+               docs/architecture.html, not a gate.
+
+          409  The audit is about a different model than the one being served.
+               A frozen artifact is the one thing in this service that CAN go
+               stale against the booster: retrain, and the JSON still cheerfully
+               reports Mississippi at 0.7448. So it is bound to the model by
+               trained_at -- the same binding load_calibrator() enforces between
+               the calibrator and the booster (calibrate.py) -- and on mismatch
+               the response carries BOTH timestamps and NOT ONE RATIO.
+
+               Withholding the numbers is the point. A client handed stale
+               ratios plus a warning label will draw the ratios; the only
+               reliable way to stop a stale number being rendered as a current
+               one is to not send it.
+
+        Depends(get_bundle) for the same reason /calibrator uses it: the
+        comparison is against the bundle /score actually decides with, not a
+        second read of the same pickle.
+        """
+        if not audit.available:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=audit.unavailable_reason,
+            )
+        if is_stale(audit.audit, bundle):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": (
+                        "The fairness audit on disk was run against a different "
+                        "model than the one this service is serving. Refusing to "
+                        "report its ratios: they describe a booster that is not "
+                        "making these decisions. Re-run scripts/audit_fairness.py."
+                    ),
+                    "audit_model_trained_at": audit_model_trained_at(audit.audit),
+                    "shipped_model_trained_at": bundle.model_trained_at,
+                },
+            )
+        return FairnessResponse(
+            **audit.audit,
+            shipped_model_trained_at=bundle.model_trained_at,
         )
 
     @app.post("/score", response_model=ScoreResponse)

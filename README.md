@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-277%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-289%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -80,10 +80,14 @@ suspicious paid off:
 
 **`addr_state` was a digital-redlining shortcut, so production dropped it.** The three-layer
 fairness audit ends in an ablation that retrains the model *with* and *without* the state feature.
-With `addr_state` in, Mississippi's Equal-Opportunity ratio for good borrowers sat at **~0.74** —
-well under the 0.80 benchmark. Retrain without it and that ratio recovers to **~0.99**, at a
-test-AUC cost of just **0.0036** (0.6690 → 0.6654). The state label wasn't encoding Mississippi's
-economics; it was a geographic proxy the model leaned on as a shortcut. The shipped model omits it.
+With `addr_state` in, Mississippi's Equal-Opportunity ratio for good borrowers sat at **0.745,
+95% CI [0.716, 0.774]** — the *entire* interval under the 0.80 benchmark. Retrain without it and
+it recovers to **0.988, CI [0.962, 1.012]**, at a test-AUC cost of just **0.0036** (0.6690 →
+0.6654). The two intervals don't overlap, and MS is the only state confirmed with the label in —
+zero once it's out. That the shift survives a bootstrap is the claim; two bare point estimates
+couldn't tell it apart from sampling noise, which is precisely what Layer 1 exists to refuse. The
+state label wasn't encoding Mississippi's economics; it was a geographic proxy the model leaned on
+as a shortcut. The shipped model omits it, and `GET /fairness` serves the evidence.
 (This is a redlining-*risk* analysis through geography, not a legal disparate-impact finding — see
 [What this isn't](#what-this-isnt).)
 
@@ -156,6 +160,20 @@ readiness and the identity of what's loaded. It reuses `src/`'s logic rather tha
 re-implementing it — `/score` calls `explain_applicants()` directly, from `serving/app.py`'s
 `/score` handler, the same function `tests/test_explain.py` exercises, so production scoring and
 tested scoring run through one code path, not two.
+
+**`GET /fairness` serves the audit — and refuses to, when it's about a different model.**
+The three-layer audit can't run inside the service: it needs the 167 MB assessment CSV (the
+first line of `.dockerignore`, because the brief forbids redistributing it) and ~40 s to
+retrain both ablation variants. So `scripts/audit_fairness.py` runs it offline and freezes
+~35 KB of *derived ratios* — 50 Equal-Opportunity ratios with bootstrap CIs, the threshold
+sweep, the ablation — into `models/fairness_audit.json`, which is committed (the two `.pkl`
+files beside it are not; see `.gitignore`). That artifact is the one thing in this service
+that can go stale: retrain, and the JSON still cheerfully reports Mississippi at 0.7448.
+So it's **bound to the model by `trained_at`** — the same binding `load_calibrator()` already
+enforces between the calibrator and the booster — and on mismatch `/fairness` returns **409
+with both timestamps and not one ratio**. Withholding the numbers is the point: a client
+handed stale ratios with a warning attached will draw the ratios. Fail-closed on the numbers,
+fail-**open** on the service — a broken reporting artifact never stops `/score`.
 
 As of Phase 1, `fico_n` is no longer self-reported by the applicant. `POST /score` takes an
 `applicant_id` instead, and the service fetches `fico_n` from a `CreditBureau` — a
@@ -235,7 +253,7 @@ project exists to catch, so it is written the long way instead.
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run. Training-only as of Phase 2 — `serving/`'s import graph does not reach it (see "Serving layer" above) |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
-| **pytest** | 277 tests across the modeling layer |
+| **pytest** | 289 tests across the modeling layer |
 
 ---
 
@@ -243,7 +261,7 @@ project exists to catch, so it is written the long way instead.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (277 passing)
+uv run pytest                                        # run the test suite (289 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
@@ -279,5 +297,5 @@ serving/       FastAPI HTTP scoring adapter (/score, /healthz) + the credit-bure
                protocol/mock (bureau.py) -- not deployed (see docs/design.md §4)
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (277 passing)
+tests/         pytest suite (289 passing)
 ```

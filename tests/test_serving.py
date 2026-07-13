@@ -75,7 +75,9 @@ Run:  pytest tests/test_serving.py -v
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
+import json
 import subprocess
 import sys
 from datetime import datetime
@@ -96,6 +98,19 @@ from fastapi.testclient import TestClient
 from pipelines.drift_check import DEFAULT_ALARM_THRESHOLDS
 import src.explain as src_explain
 from src.data_validation import FICO_MAX, FICO_MIN, VALID_HOME_OWNERSHIP, VALID_PURPOSE
+# The fairness audit's OWN constants -- the 0.80 rule, the bootstrap count, the
+# ablation's deliberately-not-the-operating-point threshold. Imported, never
+# retyped, for the same reason DEFAULT_ALARM_THRESHOLDS is: a hardcoded 0.80
+# here would be a second copy of the rule, inside the test that exists to prove
+# the client is handed the real one.
+from src.fairness import (
+    ABLATION_THRESHOLD,
+    EO_THRESHOLD,
+    MIN_N,
+    N_BOOT,
+    SWEEP_THRESHOLDS,
+    WATCH_STATES,
+)
 from src.features import CATEGORICAL, FEATURES, TARGET, emp_order
 from src.model_io import _x, load_model_artifact, train_lgb
 from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
@@ -104,7 +119,13 @@ from src.explain import DEFAULT_EXPLAIN_THRESHOLD, explain_applicants
 from serving.app import DRIFT_DEMO_AVAILABLE, create_app
 from serving.artifacts import load_bundle
 from serving.bureau import CreditBureau, CreditReport, MockBureau
-from serving.config import SELECTED_THRESHOLD
+from serving.config import FAIRNESS_AUDIT_PATH, SELECTED_THRESHOLD
+from serving.fairness import (
+    FairnessAudit,
+    audit_model_trained_at,
+    is_stale,
+    load_fairness_audit,
+)
 from serving.schema import (
     EMP_LENGTH_NOT_DISCLOSED,
     VALID_EMP_LENGTH,
@@ -1043,9 +1064,26 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_importing_serving_app_pulls_in_no_training_dependency():
+    # src.fairness and scripts.demo_drift join the list with GET /fairness.
+    # serving/fairness.py is a JSON reader and a string comparison; it must
+    # never reach for the audit itself, which calls load_raw() and expects the
+    # 167 MB assessment CSV -- a file .dockerignore excludes on purpose.
+    # Importing src.fairness into the serving process would be the first step
+    # toward a route that cannot run in the image it ships in.
+    #
+    # `scripts.demo_drift`, NOT `scripts`. The bare `scripts` namespace package
+    # IS in sys.modules after this import, legitimately and unavoidably:
+    # DRIFT_DEMO_AVAILABLE probes find_spec("scripts.demo_drift"), and finding a
+    # spec for a submodule requires importing its parent to look inside it.
+    # There is no scripts/__init__.py -- it is an empty namespace package, so
+    # that import executes nothing and pulls in nothing. Watching `scripts` here
+    # would fail on a fact about how find_spec works rather than on a dependency
+    # leak, and the only way to make it pass would be to delete the honest
+    # find_spec probe that keeps /drift out of the image.
     probe = (
         "import sys; import serving.app; "
-        "print(','.join(m for m in ('mlflow', 'metaflow', 'seaborn', 'pipelines') "
+        "print(','.join(m for m in ('mlflow', 'metaflow', 'seaborn', 'pipelines', "
+        "'src.fairness', 'scripts.demo_drift') "
         "if m in sys.modules))"
     )
     result = subprocess.run(
@@ -1071,3 +1109,272 @@ def test_the_drift_route_is_mounted_here_and_would_not_be_in_the_image():
     which is what keeps the test above true."""
     assert DRIFT_DEMO_AVAILABLE is True
     assert importlib.util.find_spec("scripts.demo_drift") is not None
+
+
+
+
+# ---------------------------------------------------------------------------
+# GET /fairness -- the frozen audit, and the gate that binds it to the model.
+#
+# tests/test_fairness.py owns the audit's correctness. What is tested here is
+# the one thing that can rot: a JSON file on disk claiming to describe a
+# booster. /fairness is the only route in this service whose payload is not
+# read live off the bundle, so it is the only one that can go stale -- and the
+# gate is the entire reason it is allowed to exist at all.
+#
+# The synthetic `bundle` fixture is NOT usable for the happy path: it is a
+# throwaway model trained in tmp_path, so the committed audit is honestly stale
+# against it. These tests take the SHIPPED bundle, and skip where the rest of
+# the file skips -- models/*.pkl is gitignored, so a fresh clone has the audit
+# (committed) but not the model (not committed).
+# ---------------------------------------------------------------------------
+SHIPPED = pytest.mark.skipif(
+    not DEFAULT_MODEL_PATH.exists(),
+    reason="shipped model artifact absent (models/ is gitignored)",
+)
+
+# Numbers that must never appear in a 409 body. The point of refusing a stale
+# audit is that the client is not handed ratios it could draw.
+FAIRNESS_RATIOS = ("0.7448", "0.9879", "0.6690", "0.6654")
+
+
+@pytest.fixture(scope="module")
+def shipped_bundle():
+    return load_bundle()
+
+
+@pytest.fixture(scope="module")
+def shipped_audit():
+    return load_fairness_audit()
+
+
+@pytest.fixture(scope="module")
+def fairness_client(shipped_bundle, shipped_audit):
+    return TestClient(
+        create_app(bundle=shipped_bundle, bureau=MockBureau(), audit=shipped_audit)
+    )
+
+
+@SHIPPED
+def test_the_committed_audit_describes_the_model_we_actually_ship(
+    shipped_bundle, shipped_audit
+):
+    """
+    THE test. The others check that the gate WORKS; this checks that the gate is
+    currently OPEN -- that models/fairness_audit.json is about the booster in
+    models/lgbm_model.pkl, and not about one from three retrains ago.
+
+    If this goes red, the fix is `uv run python scripts/audit_fairness.py`, not
+    an edit to this assertion. A failure here means the repo is asserting a
+    fairness claim about a model it is not serving -- the exact defect the
+    artifact-plus-gate design exists to make impossible to ship quietly.
+    """
+    assert shipped_audit.available, shipped_audit.unavailable_reason
+    assert not is_stale(shipped_audit.audit, shipped_bundle), (
+        "models/fairness_audit.json was run against "
+        f"{audit_model_trained_at(shipped_audit.audit)}, but the shipped model was "
+        f"trained at {shipped_bundle.model_trained_at}. "
+        "Re-run scripts/audit_fairness.py."
+    )
+
+
+@SHIPPED
+def test_fairness_shows_the_provenance_match_rather_than_asking_for_trust(
+    fairness_client, shipped_bundle
+):
+    body = fairness_client.get("/fairness").json()
+
+    # The client can SEE the binding hold, instead of inferring it from the
+    # absence of a 409.
+    assert body["model"]["trained_at"] == body["shipped_model_trained_at"]
+    assert body["shipped_model_trained_at"] == shipped_bundle.model_trained_at
+
+    # The fairness conclusion, executed and checkable: the model that made
+    # these decisions has no addr_state to lean on.
+    assert body["model"]["includes_addr_state"] is False
+    assert "addr_state" not in body["model"]["features"]
+
+
+@SHIPPED
+def test_the_endpoint_reports_the_artifact_it_computes_nothing(fairness_client):
+    """
+    Every number on the wire already existed in the JSON on disk. /fairness is a
+    file reader; if it were quietly deriving anything, the two would diverge.
+    """
+    body = fairness_client.get("/fairness").json()
+    on_disk = json.loads(FAIRNESS_AUDIT_PATH.read_text())
+
+    for key in ("schema_version", "generated_at", "model", "constants",
+                "layer1", "layer2", "layer3"):
+        assert body[key] == on_disk[key]
+
+    # shipped_model_trained_at is the ONLY key the route adds, and it is read
+    # off the live bundle rather than copied out of the file.
+    assert set(body) - set(on_disk) == {"shipped_model_trained_at"}
+
+
+@SHIPPED
+def test_the_audits_constants_are_the_audits_own_not_retyped_in_serving(fairness_client):
+    """
+    A client draws the 0.80 line, and it must draw it where src/fairness.py puts
+    it -- the same discipline /drift follows with DEFAULT_ALARM_THRESHOLDS.
+    """
+    constants = fairness_client.get("/fairness").json()["constants"]
+
+    assert constants["eo_threshold"] == EO_THRESHOLD
+    assert constants["min_n"] == MIN_N
+    assert constants["n_boot"] == N_BOOT
+    assert constants["ablation_threshold"] == ABLATION_THRESHOLD
+    assert constants["watch_states"] == list(WATCH_STATES)
+    assert constants["sweep_thresholds"] == list(SWEEP_THRESHOLDS)
+
+
+@SHIPPED
+def test_layer1_audits_the_shipped_model_at_the_point_score_decides_at(
+    fairness_client, shipped_bundle
+):
+    """
+    Auditing at any other cutoff answers a question nobody asked. And the value
+    is SELECTED_THRESHOLD (0.25000000000000006), not the literal 0.25 -- a real,
+    different float (serving/config.py).
+    """
+    layer1 = fairness_client.get("/fairness").json()["layer1"]
+
+    assert layer1["threshold"] == SELECTED_THRESHOLD
+    assert layer1["threshold"] == shipped_bundle.threshold
+
+
+@SHIPPED
+def test_every_reported_interval_brackets_its_own_point_estimate(fairness_client):
+    """
+    The CI is the whole reason Layer 3 now returns its Test frames. An interval
+    that did not contain its own ratio would make the chart drawn from it
+    fiction.
+    """
+    body = fairness_client.get("/fairness").json()
+
+    for row in body["layer1"]["states"]:
+        assert row["ci_low"] <= row["eo_ratio"] <= row["ci_high"], row["state"]
+
+    for row in body["layer3"]["states"]:
+        for side in ("with_state", "no_state"):
+            assert (
+                row[f"ci_low_{side}"] <= row[f"eo_ratio_{side}"] <= row[f"ci_high_{side}"]
+            ), (row["state"], side)
+        # Same Test set, same y_true: the ablation toggles a feature, not a
+        # population. A free invariant, so assert it.
+        assert row["n_good_with_state"] == row["n_good_no_state"]
+
+
+@SHIPPED
+def test_the_ablation_is_the_evidence_the_readme_claims_it_is(fairness_client):
+    """
+    The repo's loudest fairness claim, checked against the artifact that is
+    actually shipped: MS is CONFIRMED (whole CI below the 0.80 line) with the
+    state label, and clear without it -- and no state is confirmed once
+    addr_state is gone.
+
+    Deliberately asserted as an INTERVAL claim, not "0.744 -> 0.988". The point
+    of returning Layer 3's frames was that two bare point estimates cannot tell
+    a real shift from sampling noise. A test that pinned the point estimates
+    would be re-committing the error the CIs were added to fix.
+    """
+    body = fairness_client.get("/fairness").json()
+    eo_threshold = body["constants"]["eo_threshold"]
+    states = {row["state"]: row for row in body["layer3"]["states"]}
+
+    ms = states["MS"]
+    assert ms["ci_high_with_state"] < eo_threshold      # whole interval below 0.80
+    assert ms["ci_high_no_state"] > eo_threshold        # recovers past it
+    assert ms["ci_low_no_state"] > ms["ci_high_with_state"]  # intervals disjoint
+
+    confirmed_with = {s for s, r in states.items()
+                      if r["verdict_with_state"].startswith("confirmed")}
+    confirmed_without = {s for s, r in states.items()
+                         if r["verdict_no_state"].startswith("confirmed")}
+    assert confirmed_with == {"MS"}
+    assert confirmed_without == set()
+
+    # And the price, which the README quotes: dropping the feature costs AUC.
+    assert body["layer3"]["auc_no_state"] < body["layer3"]["auc_with_state"]
+
+
+@SHIPPED
+def test_a_stale_audit_is_refused_and_not_one_ratio_is_sent(shipped_bundle, shipped_audit):
+    """
+    The 409 carries BOTH timestamps and NO numbers.
+
+    Sending the ratios with a warning attached is not a middle ground: a client
+    handed numbers will draw them. Withholding them is the only thing that
+    reliably stops a stale ratio being rendered as a current one.
+    """
+    relabelled = dataclasses.replace(
+        shipped_bundle, model_trained_at="2099-01-01T00:00:00+00:00"
+    )
+    client = TestClient(
+        create_app(bundle=relabelled, bureau=MockBureau(), audit=shipped_audit)
+    )
+    response = client.get("/fairness")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["audit_model_trained_at"] == shipped_bundle.model_trained_at
+    assert detail["shipped_model_trained_at"] == "2099-01-01T00:00:00+00:00"
+
+    for ratio in FAIRNESS_RATIOS:
+        assert ratio not in response.text, f"a stale {ratio} escaped in the 409 body"
+
+
+def test_an_audit_that_cannot_name_its_model_is_stale_by_default(bundle):
+    """
+    Absence of provenance is not evidence of a match. An artifact that cannot
+    say which model it audited has not earned the benefit of the doubt.
+    """
+    nameless = FairnessAudit({"schema_version": 1, "model": {}}, None)
+    assert is_stale(nameless.audit, bundle)
+
+
+def test_fairness_is_absent_not_broken_when_there_is_no_artifact(bundle):
+    missing = load_fairness_audit(Path("models/no_such_audit.json"))
+    assert not missing.available
+
+    client = TestClient(create_app(bundle=bundle, bureau=MockBureau(), audit=missing))
+    response = client.get("/fairness")
+
+    assert response.status_code == 404
+    assert "scripts/audit_fairness.py" in response.json()["detail"]
+
+
+def test_an_unknown_schema_version_is_refused_rather_than_read_halfway(tmp_path):
+    """
+    A future artifact shape must not be read partially: absent keys would surface
+    as nulls on the wire and render as blank chart axes instead of as an error.
+    """
+    future = tmp_path / "fairness_audit.json"
+    future.write_text(json.dumps({"schema_version": 99, "model": {"trained_at": "x"}}))
+
+    loaded = load_fairness_audit(future)
+
+    assert not loaded.available
+    assert "schema_version" in loaded.unavailable_reason
+
+
+def test_a_broken_fairness_artifact_never_takes_scoring_down(bundle):
+    """
+    Fail-closed on the numbers, fail-OPEN on the service.
+
+    The audit is a REPORTING signal (blue in docs/architecture.html), not a
+    gate -- the same policy training_flow.py's explain step applies. The
+    synthetic `bundle` here is genuinely a different model from the one the
+    committed audit describes, so this is a real staleness, not a simulated one.
+    """
+    cases = {
+        "stale": load_fairness_audit(),
+        "absent": load_fairness_audit(Path("models/no_such_audit.json")),
+    }
+    for label, audit in cases.items():
+        client = TestClient(create_app(bundle=bundle, bureau=MockBureau(), audit=audit))
+        assert client.get("/fairness").status_code in (404, 409), label
+        # ...and the service goes right on scoring applicants.
+        assert client.post("/score", json=GOOD).status_code == 200, label
+        assert client.get("/healthz").status_code == 200, label

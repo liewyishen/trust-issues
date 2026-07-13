@@ -48,3 +48,14 @@ SELECTED_THRESHOLD: float = 0.25000000000000006
 # of resolving silently on the first request.
 MODEL_PATH: Path = DEFAULT_MODEL_PATH
 CALIBRATOR_PATH: Path = DEFAULT_MODEL_PATH.parent / "isotonic_calibrator.pkl"
+
+# The frozen fairness audit (scripts/audit_fairness.py). It sits beside the
+# model on purpose: serving/fairness.py binds it to that model by trained_at
+# and refuses to serve it if they disagree, so the two belong in one place.
+#
+# Unlike its neighbours in models/, this one is COMMITTED -- models/ and
+# data/*.csv are both gitignored, so a fresh clone can neither serve the model
+# nor regenerate the audit (it needs the 167 MB CSV). If this file were a build
+# output, the fairness evidence would exist only on the machine that ran it.
+# See .gitignore's negation, and scripts/audit_fairness.py's docstring.
+FAIRNESS_AUDIT_PATH: Path = DEFAULT_MODEL_PATH.parent / "fairness_audit.json"

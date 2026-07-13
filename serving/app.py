@@ -387,11 +387,26 @@ def create_app(
             # can exist on this app at all. `app = create_app()` runs at module
             # scope, so importing drift_report anywhere above this line would
             # put mlflow + metaflow + pipelines into serving.app's import graph
-            # (measured: `import serving.app` pulls all three, +1.3s) -- exactly
-            # what the [dependency-groups] split and the slim image exist to
-            # prevent, and what tests/test_serving.py's subprocess guard now
-            # enforces. Deferring it to the first request keeps the module graph
-            # clean and costs one 1.3s import, once, on a demo route.
+            # -- exactly what the [dependency-groups] split and the slim image
+            # exist to prevent, and what tests/test_serving.py's subprocess guard
+            # now enforces. Deferring it to the first request keeps the module
+            # graph clean and costs one lazy import, once, on a demo route.
+            #
+            # What that import costs, measured, because the two figures are
+            # different and only one of them is the user's:
+            #
+            #   ~1.3s   `import scripts.demo_drift` in a BARE interpreter. This is
+            #           the cost of the mistake -- what module-scope import would
+            #           add to `import serving.app`, i.e. to container startup.
+            #   ~0.40s  the first POST /drift on a running uvicorn (0.409 / 0.397
+            #           across two cold restarts; 0.05s every call after).
+            #
+            # The second is smaller because uvicorn has ALREADY imported
+            # pandas/scipy/sklearn/shap at startup, for /score. So the first
+            # request pays only mlflow and metaflow's MARGINAL cost on a warm
+            # graph, not the whole 1.3s. Quoting the bare-interpreter number as
+            # the request cost overstates it ~3x -- and it is the number a client
+            # would size its loading state against, so it is worth being exact.
             #
             # The trade is deliberate and it is a real trade: a breakage inside
             # demo_drift.py surfaces here as a 500 on the first call, not as a

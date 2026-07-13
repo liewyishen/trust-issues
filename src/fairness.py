@@ -428,10 +428,44 @@ def audit_layer3_ablation(
          "auc_with_state": float, "auc_no_state": float, "auc_cost": float,
          "base_approval_with_state": float, "base_approval_no_state": float,
          "states": pd.DataFrame with columns
-             state, eo_with_state, eo_no_state, shift, verdict}
+             state, eo_with_state, eo_no_state, shift, verdict,
+         "fair_df_with_state": pd.DataFrame, "fair_df_no_state": pd.DataFrame}
         verdict is one of "fixed by removal (shortcut / geographic-proxy
         risk)", "persists (reflects real economic differences)", or
         "was already clear".
+
+        The two fair_df_* frames carry columns addr_state / y_true / p -- the
+        SAME contract audit_layer1 and audit_layer2 already take as input.
+        They are the calibrated Test predictions of the two variants this
+        function trains, which it has always computed and, until now, dropped
+        on the floor once it had reduced them to a point EO ratio per state.
+
+        They are returned because a point estimate is not evidence -- the
+        premise Layer 1 is built on. "MS sits at 0.745 with state and 0.988
+        without" invites exactly the credulity audit_layer1() exists to
+        refuse; without an interval around each number, a reader cannot tell
+        that shift apart from sampling noise. Handing back both frames lets a
+        caller run the REAL audit_layer1() over each variant and put a
+        bootstrap CI on both sides of the ablation, rather than a second,
+        separately-written CI path growing up somewhere downstream.
+
+        Returning them adds no computation: both are slices of arrays this
+        function already has in hand. Feeding them BACK through audit_layer1
+        does cost ~2x its bootstrap (2000 resamples per state per variant) --
+        which is why that is the caller's decision to make, not this
+        function's. Nothing already in-tree pays it: run_fairness_audit()
+        below still audits only the shipped model, and training_flow.py's
+        fairness_scalars() reduces this dict to scalars and drops the frames.
+
+        Both frames come from THIS function's two controlled retrains -- same
+        splits, same fixed round count, one feature toggled. That is what
+        makes them comparable to each other. Neither is the SHIPPED model:
+        run_fairness_audit()'s own top-level `fair_df` is the shipped
+        artifact's (its own best_iteration, its own isotonic fit) and is a
+        different model from fair_df_no_state, despite both being "no-state".
+        Do not draw a before/after from one of these against that one -- that
+        comparison would confound the feature toggle with the training
+        procedure, which is the whole thing a controlled ablation is for.
     """
     p_test_with, y_test_with = _train_ablation_variant(
         splits, FEATURES_WITH_STATE, CATEGORICAL_WITH_STATE, num_boost_round,
@@ -480,6 +514,19 @@ def audit_layer3_ablation(
             "verdict": verdict,
         })
 
+    # y_test_with and y_test_ns are the same vector -- both variants read the
+    # same splits["test"] (see _train_ablation_variant's docstring), and the
+    # assert says so rather than leaving a reader to take it on trust.
+    assert (y_test_with.values == y_test_ns.values).all()
+
+    def _fair_df(p_vec) -> pd.DataFrame:
+        """audit_layer1 / audit_layer2's input contract, nothing more."""
+        return pd.DataFrame({
+            "addr_state": states_vec,
+            "y_true": y_test_with.values,
+            "p": np.asarray(p_vec),
+        })
+
     return {
         "threshold": threshold,
         "auc_with_state": auc_with,
@@ -488,6 +535,8 @@ def audit_layer3_ablation(
         "base_approval_with_state": base_with,
         "base_approval_no_state": base_ns,
         "states": pd.DataFrame(rows),
+        "fair_df_with_state": _fair_df(p_test_with),
+        "fair_df_no_state": _fair_df(p_test_ns),
     }
 
 

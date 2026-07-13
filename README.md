@@ -173,9 +173,17 @@ credit system.
 
 ![Serving flow](docs/architecture-serving.png)
 
-*Read this one differently from the diagram above: it traces a single HTTP request through
-`POST /score`, not a pipeline run, and its legend is bracket notation — `[X]`, `( )`, `{ }` —
-rather than colour.*
+*[Interactive version](docs/architecture-serving.html) — same convention as the training diagram:
+every label cites the symbol it was verified under, and the page's Export-as-PNG button regenerates
+the image above.*
+
+*Read this one differently from the diagram above: it traces HTTP requests through the five routes,
+not a pipeline run. Its legend adds bracket notation — `[X]` a gate that can halt, `( )` a normal
+step, `{ }` a **deferred** branch — and one marker the training diagram has no need for: **dev-only**,
+for code that is wired and tested here and deliberately absent from the slim image. Dev-only is not
+deferred, and the diagram keeps them apart: deferred code does not exist yet; dev-only code exists,
+works, and simply is not shipped — and when it isn't there, the API says so rather than inventing an
+answer.*
 
 `[X]` is a gate that can halt the request: 422 on invalid input (closed enums, strict floats,
 `extra="forbid"`), 500 when the additivity guard fails (`src/explain.py`'s `_assert_additivity`,

@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>trust-issues — serving architecture</title>
+<style>
+  html,body{margin:0;padding:0;background:#0b0f14;color:#e6edf3;}
+  .bar{position:sticky;top:0;display:flex;align-items:center;gap:16px;
+       padding:10px 16px;background:#0d1117;border-bottom:1px solid #2d333b;
+       font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+       font-size:13px;color:#9198a1;z-index:2;}
+  .bar button{margin-left:auto;background:#1f6feb;color:#fff;border:0;border-radius:6px;
+       padding:7px 14px;font:600 13px system-ui,sans-serif;cursor:pointer;}
+  .bar button:hover{background:#2f81f7;}
+  .bar button:disabled{opacity:.6;cursor:wait;}
+  .wrap{padding:12px;}
+</style>
+</head>
+<body>
+<div class="bar">
+  <span>docs/architecture-serving.html — the real wiring, traced from source (file + symbol on every box)</span>
+  <button id="exportBtn">Export as PNG</button>
+</div>
+<div class="wrap">
+<svg id="arch" xmlns="http://www.w3.org/2000/svg" width="1360" height="1400" viewBox="0 0 1360 1400"
+     role="img" aria-label="trust-issues serving layer: startup contract, CORS, five HTTP routes, fail-closed gates, the staleness gate, dev-only and deferred branches">
+<style>
+  text{font-family:ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#adbac7;}
+  .sans{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;}
+  .title{font-size:17px;font-weight:700;fill:#e6edf3;}
+  .sub{font-size:10.5px;fill:#9198a1;}
+  .bt{font-size:11.5px;font-weight:700;fill:#e6edf3;}
+  .m10{font-size:10px;fill:#e6edf3;}
+  .m95{font-size:9.5px;fill:#adbac7;}
+  .m9{font-size:9px;fill:#9198a1;}
+  .m85{font-size:8.5px;fill:#9198a1;}
+  .m8{font-size:8px;fill:#9198a1;}
+  .lg{font-size:10px;}
+  .halt{fill:#f85149;}
+  .rep{fill:#58a6ff;}
+  .grey{fill:#8b949e;}
+  .wht{fill:#e6edf3;}
+  .amb{fill:#d29922;}
+  .ital{font-style:italic;}
+  .mid{text-anchor:middle;}
+  .end{text-anchor:end;}
+  .box{fill:#161c23;stroke:#444c56;}
+  .cont{fill:#0f141b;stroke:#2d333b;}
+  .scont{fill:#0d1219;stroke:#2d333b;}
+  .art{fill:#0e1319;stroke:#768390;}
+  .gr{fill:#201113;stroke:#f85149;stroke-width:2;}
+  .gb{fill:#0d1a2b;stroke:#58a6ff;stroke-width:2;}
+  .dev{fill:#1a1408;stroke:#d29922;stroke-dasharray:6 4;}
+  .defr{fill:#12161b;stroke:#8b949e;stroke-dasharray:4 3;}
+  .ef{stroke:#768390;stroke-width:1.5;fill:none;}
+  .eh{stroke:#f85149;stroke-width:1.5;fill:none;}
+  .eb{stroke:#58a6ff;stroke-width:1.5;fill:none;}
+  .eo{stroke:#8b949e;stroke-width:1.5;fill:none;stroke-dasharray:5 4;}
+  .ea{stroke:#d29922;stroke-width:1.5;fill:none;stroke-dasharray:5 4;}
+</style>
+<defs>
+  <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#768390"/></marker>
+  <marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#f85149"/></marker>
+  <marker id="mb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#58a6ff"/></marker>
+  <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#d29922"/></marker>
+  <marker id="mo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0L10,5L0,10z" fill="#8b949e"/></marker>
+</defs>
+
+<rect x="0" y="0" width="1360" height="1400" fill="#0b0f14"/>
+
+<!-- ======================= header ======================= -->
+<text class="sans title" x="24" y="28">trust-issues — the serving layer, the real wiring</text>
+<text class="sans sub end" x="1336" y="28">traced 2026-07-13 — five routes, CORS, the staleness gate · labels cite symbols, not line numbers · no box from memory</text>
+
+<!-- ======================= legend ======================= -->
+<rect class="cont" x="16" y="40" width="1328" height="92" rx="8"/>
+<text class="m85 grey" x="28" y="58" style="letter-spacing:2px">LEGEND</text>
+<path class="gr" d="M108,60 L118,70 L108,80 L98,70 Z"/>
+<text class="sans lg halt" x="128" y="74">[X] gate that can HALT the request (4xx / 5xx)</text>
+<rect class="box" x="470" y="61" width="26" height="17" rx="3"/>
+<text class="sans lg grey" x="506" y="74">( ) normal processing step</text>
+<rect class="defr" x="800" y="61" width="26" height="17" rx="3"/>
+<text class="sans lg grey" x="836" y="74">{ } deferred — a real branch, intentionally NOT wired</text>
+<rect class="dev" x="98" y="87" width="26" height="17" rx="3"/>
+<text class="sans lg amb" x="134" y="100">dev-only — WIRED and tested here, ABSENT from the slim image</text>
+<text class="m95 wht" x="600" y="100">symbol()</text>
+<text class="sans lg grey" x="662" y="100">= verified in source under that name</text>
+<line class="eh" x1="900" y1="96" x2="932" y2="96" marker-end="url(#mr)"/>
+<text class="sans lg halt" x="942" y="100">fail-closed artifact binding</text>
+<text class="sans lg grey" x="98" y="122">dev-only ≠ deferred. Deferred code does not exist yet. Dev-only code exists, is tested, and is deliberately not shipped — and when it is absent, the API says so (404) rather than inventing an answer.</text>
+
+<!-- ======================= client / CORS / app ======================= -->
+<rect class="box" x="16" y="150" width="300" height="66" rx="6"/>
+<text class="bt" x="28" y="168">frontend/  (React + Vite, :5173)</text>
+<text class="m9" x="28" y="183">score one · compare two · 3 moats</text>
+<text class="m9" x="28" y="196">computes NO number of its own —</text>
+<text class="m9" x="28" y="209">every threshold it draws is one the API returned</text>
+
+<line class="ef" x1="316" y1="183" x2="372" y2="183" marker-end="url(#mg)"/>
+<text class="m85 mid" x="344" y="176">HTTP</text>
+
+<rect class="gb" x="374" y="150" width="286" height="66" rx="6"/>
+<text class="bt rep" x="386" y="168">CORSMiddleware</text>
+<text class="m9" x="386" y="183">CORS_ALLOW_ORIGINS (serving/app.py)</text>
+<text class="m9 rep" x="386" y="196">ENUMERATED origins, never "*"</text>
+<text class="m8" x="386" y="209">allow_credentials=False · methods GET, POST</text>
+
+<line class="ef" x1="660" y1="183" x2="716" y2="183" marker-end="url(#mg)"/>
+
+<rect class="box" x="718" y="150" width="300" height="66" rx="6"/>
+<text class="bt" x="730" y="168">create_app()  →  serving/app.py</text>
+<text class="m9" x="730" y="183">FastAPI · 5 routes · lifespan (below)</text>
+<text class="m9" x="730" y="196">app = create_app() runs at MODULE SCOPE —</text>
+<text class="m8 amb" x="730" y="209">which is why /drift imports its monitor in the handler</text>
+
+<text class="m10" x="1040" y="172">$ uv run uvicorn serving.app:app</text>
+<text class="m85" x="1040" y="186">README.md — "Run the UI against the real API"</text>
+<text class="m85" x="1040" y="200">Docker: CMD uvicorn (Dockerfile)</text>
+
+<!-- ======================= startup ======================= -->
+<rect class="cont" x="16" y="230" width="1328" height="128" rx="8"/>
+<text class="bt" x="28" y="250">STARTUP — once, in lifespan() (serving/app.py). Fail-CLOSED.</text>
+<text class="sans sub" x="560" y="250">a failed check CRASHES the process: it never serves, so there is no HTTP code — this is NOT a per-request 503</text>
+
+<rect class="box" x="32" y="264" width="220" height="76" rx="5"/>
+<text class="m10" x="44" y="282">load_bundle()</text>
+<text class="m9" x="44" y="296">serving/artifacts.py</text>
+<text class="m9" x="44" y="310">→ ArtifactBundle (frozen)</text>
+<text class="m8" x="44" y="324">holds NO explainer, deliberately</text>
+<text class="m8" x="44" y="336">(TreeExplainer is mutable state)</text>
+
+<line class="ef" x1="252" y1="296" x2="292" y2="296" marker-end="url(#mg)"/>
+
+<path class="gr" d="M312,274 L330,296 L312,318 L294,296 Z"/>
+<text class="m10 mid halt" x="312" y="300.5">✕</text>
+<text class="m95 mid wht" x="312" y="334">load_model_artifact()</text>
+<text class="m85 mid" x="312" y="346">✕ feature-contract mismatch</text>
+
+<line class="ef" x1="330" y1="296" x2="484" y2="296" marker-end="url(#mg)"/>
+
+<path class="gr" d="M504,274 L522,296 L504,318 L486,296 Z"/>
+<text class="m10 mid halt" x="504" y="300.5">✕</text>
+<text class="m95 mid wht" x="504" y="334">load_calibrator()</text>
+<text class="m85 mid" x="504" y="346">✕ stale trained_at binding</text>
+
+<line class="ef" x1="522" y1="296" x2="676" y2="296" marker-end="url(#mg)"/>
+
+<path class="gr" d="M696,274 L714,296 L696,318 L678,296 Z"/>
+<text class="m10 mid halt" x="696" y="300.5">✕</text>
+<text class="m95 mid wht" x="696" y="334">_assert_serving_enums_match_artifact()</text>
+<text class="m85 mid" x="696" y="346">✕ schema enums ≠ model categories</text>
+
+<line class="ef" x1="714" y1="296" x2="790" y2="296" marker-end="url(#mg)"/>
+
+<rect class="box" x="792" y="270" width="196" height="54" rx="5"/>
+<text class="m10" x="804" y="288">MockBureau()</text>
+<text class="m9" x="804" y="302">serving/bureau.py</text>
+<text class="m9" x="804" y="316">→ app.state.bureau</text>
+
+<line class="ef" x1="988" y1="296" x2="1028" y2="296" marker-end="url(#mg)"/>
+
+<rect class="box" x="1030" y="264" width="300" height="76" rx="5"/>
+<text class="m10" x="1042" y="282">load_fairness_audit()</text>
+<text class="m9" x="1042" y="296">serving/fairness.py — reads the frozen audit</text>
+<text class="m9 amb" x="1042" y="310">NEVER raises. It REPORTS.</text>
+<text class="m8" x="1042" y="324">a broken REPORTING artifact must not stop /score</text>
+<text class="m8" x="1042" y="336">(the same fail-open policy the pipeline's @explain uses)</text>
+
+<!-- ======================= POST /score ======================= -->
+<rect class="cont" x="16" y="372" width="1328" height="384" rx="8"/>
+<text class="bt" x="28" y="392">POST /score — one applicant → one decision</text>
+<text class="sans sub" x="380" y="392">score() (serving/app.py) · the applicant never sends fico_n; the bureau supplies it</text>
+
+<rect class="box" x="32" y="406" width="188" height="86" rx="5"/>
+<text class="m95 wht" x="44" y="424">ScoreRequest</text>
+<text class="m8" x="44" y="438">applicant_id · revenue · dti_n</text>
+<text class="m8" x="44" y="450">loan_amnt · emp_length · purpose</text>
+<text class="m8" x="44" y="462">home_ownership_n</text>
+<text class="m8 halt" x="44" y="478">7 fields. NO fico_n.</text>
+
+<line class="ef" x1="220" y1="449" x2="256" y2="449" marker-end="url(#mg)"/>
+
+<!-- gate 422 -->
+<path class="gr" d="M276,427 L294,449 L276,471 L258,449 Z"/>
+<text class="m10 mid halt" x="276" y="453.5">✕</text>
+<text class="m95 mid wht" x="276" y="487">[X] pydantic validate</text>
+<text class="m85 mid halt" x="276" y="499">✕ 422 Unprocessable</text>
+<text class="m8 mid" x="276" y="512">strict floats · closed enums</text>
+<text class="m8 mid" x="276" y="523">extra="forbid"</text>
+<text class="m8 mid halt" x="276" y="534">client sends fico_n → 422</text>
+
+<line class="ef" x1="294" y1="449" x2="446" y2="449" marker-end="url(#mg)"/>
+
+<!-- gate 503 -->
+<path class="gr" d="M466,427 L484,449 L466,471 L448,449 Z"/>
+<text class="m10 mid halt" x="466" y="453.5">✕</text>
+<text class="m95 mid wht" x="466" y="487">[X] get_bundle / get_bureau</text>
+<text class="m85 mid halt" x="466" y="499">✕ 503 Service Unavailable</text>
+<text class="m8 mid" x="466" y="512">serving/errors.py</text>
+<text class="m8 mid" x="466" y="523">artifacts · bureau</text>
+<text class="m8 mid" x="466" y="534">reachable ONLY in tests</text>
+
+<line class="ef" x1="484" y1="449" x2="530" y2="449" marker-end="url(#mg)"/>
+
+<!-- fetch -->
+<rect class="box" x="532" y="416" width="206" height="66" rx="5"/>
+<text class="m95 wht" x="544" y="434">( ) bureau.fetch(applicant_id)</text>
+<text class="m9" x="544" y="448">CreditBureau protocol (bureau.py)</text>
+<text class="m9" x="544" y="461">→ CreditReport</text>
+<text class="m8" x="544" y="474">MockBureau: fico_n ~ Normal(mean_fico, std)</text>
+
+<line class="eo" x1="635" y1="482" x2="635" y2="494" marker-end="url(#mo)"/>
+<rect class="defr" x="532" y="496" width="206" height="46" rx="5"/>
+<text class="m9 grey" x="542" y="512">{ } deferred — failed pull → 502</text>
+<text class="m8 grey" x="542" y="525">CreditBureau.fetch() may raise;</text>
+<text class="m8 grey" x="542" y="536">MockBureau does no I/O and cannot</text>
+
+<line class="ef" x1="738" y1="449" x2="774" y2="449" marker-end="url(#mg)"/>
+
+<!-- build -->
+<rect class="box" x="776" y="416" width="206" height="66" rx="5"/>
+<text class="m95 wht" x="788" y="434">( ) _to_raw_frame()</text>
+<text class="m9" x="788" y="448">serving/app.py</text>
+<text class="m9" x="788" y="461">6 request fields + report.fico_n</text>
+<text class="m8 halt" x="788" y="474">report.dti_n is NOT merged</text>
+
+<text class="m8 grey" x="788" y="500">dti_n comes from the REQUEST. The</text>
+<text class="m8 grey" x="788" y="512">bureau's dti_n is fetched and left</text>
+<text class="m8 grey" x="788" y="524">unread — wiring it in would feed the</text>
+<text class="m8 grey" x="788" y="536">model off-manifold values.</text>
+
+<line class="ef" x1="982" y1="449" x2="1018" y2="449" marker-end="url(#mg)"/>
+
+<!-- score -->
+<rect class="box" x="1020" y="410" width="216" height="78" rx="5"/>
+<text class="m95 wht" x="1032" y="428">( ) explain_applicants()</text>
+<text class="m9" x="1032" y="442">→ src/explain.py — REUSED, not rewritten</text>
+<text class="m9" x="1032" y="455">booster → sigmoid → isotonic</text>
+<text class="m9" x="1032" y="468">SHAP → ranked reason codes</text>
+<text class="m8" x="1032" y="481">a fresh TreeExplainer per request (~67 ms)</text>
+
+<text class="m8 grey" x="1032" y="506">the SAME function tests/test_explain.py</text>
+<text class="m8 grey" x="1032" y="518">exercises: served scoring and tested</text>
+<text class="m8 grey" x="1032" y="530">scoring are one code path, not two.</text>
+
+<!-- wrap down to row 2 -->
+<path class="ef" d="M1236,449 L1300,449 L1300,556 L66,556 L66,574" marker-end="url(#mg)"/>
+
+<!-- additivity: gate + text inside one box, so no edge crosses the words -->
+<rect class="box" x="32" y="576" width="592" height="74" rx="5"/>
+<path class="gr" d="M66,591 L84,613 L66,635 L48,613 Z"/>
+<text class="m10 mid halt" x="66" y="617.5">✕</text>
+<text class="m95 wht" x="100" y="594">[X] additivity guard — _assert_additivity()  (src/explain.py)</text>
+<text class="m9" x="100" y="609">base_value + Σ contributions must equal the model's raw margin</text>
+<text class="m85 halt" x="100" y="624">✕ ValueError → caught in score() → 500  ADDITIVITY_FAILURE_DETAIL</text>
+<text class="m85 grey" x="100" y="639">a decision without a valid explanation is worse than no decision</text>
+
+<line class="ef" x1="624" y1="613" x2="640" y2="613" marker-end="url(#mg)"/>
+
+<!-- decide -->
+<rect class="box" x="642" y="586" width="200" height="54" rx="5"/>
+<text class="m95 wht" x="654" y="604">( ) decide</text>
+<text class="m9" x="654" y="618">REJECT ⇔ p_calibrated ≥ threshold</text>
+<text class="m8" x="654" y="631">threshold = bundle.threshold (config.py)</text>
+
+<line class="eo" x1="742" y1="640" x2="742" y2="652" marker-end="url(#mo)"/>
+<rect class="defr" x="642" y="654" width="200" height="70" rx="5"/>
+<text class="m9 grey" x="652" y="670">{ } deferred — human review</text>
+<text class="m8 grey" x="652" y="683">reason_codes == [] when the base</text>
+<text class="m8 grey" x="652" y="695">value alone clears the boundary:</text>
+<text class="m8 grey" x="652" y="707">no principal reasons to cite.</text>
+<text class="m8 grey" x="652" y="719">design.md §6 — recorded, not wired.</text>
+
+<line class="ef" x1="842" y1="613" x2="878" y2="613" marker-end="url(#mg)"/>
+
+<!-- response -->
+<rect class="art" x="880" y="574" width="450" height="166" rx="6"/>
+<text class="bt" x="892" y="592">ScoreResponse  (serving/schema.py)</text>
+<text class="m9" x="892" y="608">scale · p_raw · p_calibrated · threshold · decision</text>
+<text class="m9" x="892" y="621">base_value_log_odds · raw_margin_log_odds</text>
+<text class="m9" x="892" y="634">contributions_log_odds · reason_codes</text>
+<text class="m9" x="892" y="647">model_trained_at · calibrator_trained_at</text>
+<rect class="box" x="892" y="656" width="426" height="52" rx="4"/>
+<text class="m95 wht" x="902" y="672">credit_report: ScoredCreditReport   ← NESTED, one key</text>
+<text class="m9" x="902" y="686">fico_n (the value the booster actually consumed)</text>
+<text class="m9" x="902" y="699">bureau · fico_version · pulled_at (which pull supplied it)</text>
+<text class="m8 halt" x="892" y="722">NOT three flat provenance fields. NO dti_n in the block.</text>
+<text class="m8 grey" x="892" y="734">contributions are LOG-ODDS. No contribution_to_probability key exists, at any level.</text>
+
+<!-- ======================= GET /healthz + /calibrator ======================= -->
+<rect class="cont" x="16" y="770" width="656" height="176" rx="8"/>
+<text class="bt" x="28" y="790">GET /healthz  ·  GET /calibrator — read the LIVE bundle</text>
+
+<rect class="box" x="32" y="802" width="286" height="60" rx="5"/>
+<text class="m95 wht" x="44" y="820">healthz() → HealthResponse</text>
+<text class="m9" x="44" y="834">status · model_trained_at</text>
+<text class="m9" x="44" y="848">calibrator_trained_at · threshold</text>
+
+<rect class="box" x="330" y="802" width="328" height="60" rx="5"/>
+<text class="m9" x="342" y="820">the threshold travels WITH the curve, on purpose:</text>
+<text class="m9" x="342" y="834">a client drawing the reject line must draw it where</text>
+<text class="m9" x="342" y="848">the service puts it — SELECTED_THRESHOLD, not 0.25</text>
+<text class="m8 halt" x="342" y="859">(0.25000000000000006 — a genuinely different float)</text>
+
+<rect class="box" x="32" y="872" width="626" height="62" rx="5"/>
+<text class="m95 wht" x="44" y="890">calibrator() → CalibratorResponse</text>
+<text class="m9" x="44" y="904">x_thresholds · y_thresholds · x_min · x_max · n_knots · n_distinct_y · threshold</text>
+<text class="m9 rep" x="44" y="917">read off the SAME ArtifactBundle /score decides with — the same object, not a second read</text>
+<text class="m8 amb" x="44" y="929">⇒ it CANNOT go stale. Whatever it returns IS what the service decides with. Contrast /fairness →</text>
+
+<!-- ======================= GET /fairness ======================= -->
+<rect class="cont" x="688" y="770" width="656" height="176" rx="8"/>
+<text class="bt" x="700" y="790">GET /fairness — the frozen audit, and the gate that binds it</text>
+<text class="sans sub end" x="1332" y="790">SHIPS in the image. NOT dev-only.</text>
+
+<rect class="box" x="704" y="802" width="212" height="76" rx="5"/>
+<text class="m95 wht" x="716" y="820">fairness() → FairnessResponse</text>
+<text class="m9" x="716" y="834">3 layers · 50 states · bootstrap CIs</text>
+<text class="m9" x="716" y="847">+ shipped_model_trained_at</text>
+<text class="m8" x="716" y="860">read from the artifact. Computes</text>
+<text class="m8" x="716" y="871">NOTHING: no ratio, no CI, no verdict.</text>
+
+<line class="ef" x1="916" y1="828" x2="936" y2="828" marker-end="url(#mg)"/>
+
+<path class="gr" d="M958,806 L976,828 L958,850 L940,828 Z"/>
+<text class="m10 mid halt" x="958" y="832.5">✕</text>
+<text class="m95 mid wht" x="958" y="866">[X] is_stale()</text>
+<text class="m85 mid" x="958" y="877">fairness.py</text>
+
+<rect class="box" x="1000" y="796" width="332" height="88" rx="5"/>
+<text class="m95 halt" x="1012" y="814">409 — the audit describes ANOTHER model</text>
+<text class="m9" x="1012" y="828">binds audit["model"]["trained_at"] against</text>
+<text class="m9" x="1012" y="841">bundle.model_trained_at — the SAME binding</text>
+<text class="m9" x="1012" y="854">load_calibrator() already enforces</text>
+<text class="m9 halt" x="1012" y="868">returns BOTH timestamps and NOT ONE RATIO</text>
+<text class="m8 grey" x="1012" y="880">a client handed stale ratios WILL draw them</text>
+
+<text class="m85 halt" x="704" y="902">404 — no artifact, unreadable, or an unknown schema_version (load_fairness_audit()).</text>
+<text class="m85 grey" x="704" y="914">The route is still MOUNTED — it simply has nothing honest to serve, and says so.</text>
+<text class="m85 amb" x="704" y="928">fail-CLOSED on the numbers, fail-OPEN on the service: /score and /healthz return 200</text>
+<text class="m85 amb" x="704" y="940">with the audit fresh, stale, OR absent — all three verified.</text>
+
+<!-- ======================= artifacts (above /drift: drift consumes none) ======================= -->
+<rect class="art" x="16" y="962" width="430" height="104" rx="6"/>
+<text class="bt" x="28" y="980">models/lgbm_model.pkl  +  isotonic_calibrator.pkl</text>
+<text class="m9" x="28" y="996">→ ArtifactBundle, loaded ONCE at startup (load_bundle())</text>
+<text class="m9 halt" x="28" y="1010">✕ load_model_artifact() — feature-contract mismatch</text>
+<text class="m9 halt" x="28" y="1023">✕ load_calibrator() — stale trained_at binding</text>
+<text class="m8 grey" x="28" y="1038">gitignored, a build output. Read live by /score · /healthz · /calibrator.</text>
+<text class="m8 amb" x="28" y="1052">The bundle CANNOT go stale: it IS the thing the service decides with.</text>
+<line class="eh" x1="230" y1="962" x2="230" y2="948" marker-end="url(#mr)"/>
+
+<rect class="art" x="466" y="962" width="470" height="104" rx="6"/>
+<text class="bt" x="478" y="980">models/fairness_audit.json  —  the frozen audit</text>
+<text class="m9" x="478" y="996">written OFFLINE by scripts/audit_fairness.py (~40 s, needs the 167 MB CSV)</text>
+<text class="m9" x="478" y="1010">~38 KB of DERIVED aggregate ratios. NOT the dataset.</text>
+<text class="m9 rep" x="478" y="1023">COMMITTED — its two .pkl neighbours are not (.gitignore: models/* + a negation)</text>
+<text class="m9 halt" x="478" y="1037">✕ bound to the booster by trained_at — is_stale() ⇒ 409, and no numbers</text>
+<text class="m8 amb" x="478" y="1052">the ONE artifact here that CAN disagree with the model. Hence the gate.</text>
+<line class="eh" x1="700" y1="962" x2="700" y2="948" marker-end="url(#mr)"/>
+
+<rect class="art" x="956" y="962" width="374" height="104" rx="6"/>
+<text class="bt" x="968" y="980">NOT in the serving image, by design</text>
+<text class="m9 halt" x="968" y="996">data/*.csv — the FIRST line of .dockerignore:</text>
+<text class="m9 halt" x="968" y="1010">the brief forbids redistributing the dataset</text>
+<text class="m9" x="968" y="1023">pipelines/ · mlflow · metaflow — excluded for SIZE</text>
+<text class="m8 grey" x="968" y="1038">Two different reasons, and the difference IS the design:</text>
+<text class="m8 grey" x="968" y="1052">size is reversible. The dataset ban is not.</text>
+
+<!-- ======================= POST /drift (dev-only) ======================= -->
+<rect class="dev" x="16" y="1084" width="1328" height="196" rx="8"/>
+<text class="bt amb" x="28" y="1104">POST /drift — DEV-ONLY. Wired and tested here; ABSENT from the slim image.</text>
+<text class="sans sub end" x="1332" y="1104">not deferred — it exists and it works. It is simply not shipped.</text>
+
+<rect class="box" x="32" y="1118" width="268" height="76" rx="5"/>
+<text class="m95 wht" x="44" y="1136">DRIFT_DEMO_AVAILABLE</text>
+<text class="m9" x="44" y="1150">= _drift_demo_importable() (app.py)</text>
+<text class="m9" x="44" y="1163">find_spec("scripts.demo_drift")</text>
+<text class="m8 amb" x="44" y="1177">False in the image ⇒ the route is never</text>
+<text class="m8 amb" x="44" y="1188">MOUNTED ⇒ an honest 404, not a fake chart</text>
+
+<line class="ea" x1="300" y1="1156" x2="340" y2="1156" marker-end="url(#ma)"/>
+
+<rect class="box" x="342" y="1118" width="284" height="76" rx="5"/>
+<text class="m95 wht" x="354" y="1136">drift() → DriftResponse</text>
+<text class="m9" x="354" y="1150">DriftRequest { mean_fico }</text>
+<text class="m9 amb" x="354" y="1163">imports drift_report INSIDE the handler</text>
+<text class="m8" x="354" y="1177">app = create_app() runs at module scope, so a</text>
+<text class="m8" x="354" y="1188">top-level import would pull mlflow+metaflow in</text>
+
+<line class="ef" x1="626" y1="1156" x2="662" y2="1156" marker-end="url(#mg)"/>
+
+<rect class="box" x="664" y="1118" width="288" height="76" rx="5"/>
+<text class="m95 wht" x="676" y="1136">drift_report()  →  scripts/demo_drift.py</text>
+<text class="m9" x="676" y="1150">ONE sampling path, shared with the CLI demo</text>
+<text class="m9" x="676" y="1163">two MockBureau batches: ref @700, cur @ knob</text>
+<text class="m8" x="676" y="1177">deterministic: same knob ⇒ byte-identical numbers</text>
+<text class="m8" x="676" y="1188">(fixed applicant ids, hash-seeded)</text>
+
+<line class="ef" x1="952" y1="1156" x2="988" y2="1156" marker-end="url(#mg)"/>
+
+<rect class="box" x="990" y="1118" width="340" height="76" rx="5"/>
+<text class="m95 wht" x="1002" y="1136">pipelines/drift_check.py — the REAL monitor</text>
+<text class="m9" x="1002" y="1150">drift_metrics() · evaluate_alarms()</text>
+<text class="m9" x="1002" y="1163">DEFAULT_ALARM_THRESHOLDS — the alarm line</text>
+<text class="m8 halt" x="1002" y="1177">there is NO psi, NO ks and NO alarm rule in serving/</text>
+<text class="m8 grey" x="1002" y="1188">the same functions the batch job calls</text>
+
+<text class="m9 amb" x="32" y="1216">no Depends(get_bundle) — and that is not an oversight. The distribution monitor touches NO model: PSI, KS and the alarms come from the population's fico_n / dti_n alone.</text>
+<text class="m85 grey" x="32" y="1232">Guarded by test: `import serving.app` pulls in NO mlflow, NO metaflow, NO pipelines, NO src.fairness, NO scripts.demo_drift. /drift was the first route on the far side of that line — the slim image (2.64GB → 937MB) depends on it holding.</text>
+<text class="m85 grey" x="32" y="1248">The image copies src/ serving/ models/ and installs no training group, so pipelines/ is not there to import. The route's absence is a FACT about the build, and the 404 reports that fact rather than papering over it.</text>
+<text class="m85 grey" x="32" y="1264">`scripts` (the bare namespace package) IS imported by the find_spec probe and executes nothing — it is `scripts.demo_drift` that must stay out, and the guard watches THAT name.</text>
+
+<!-- ======================= footer ======================= -->
+<text class="m85" x="24" y="1316">Why fairness is a frozen artifact while drift is a live wrap: the drift monitor's population is GENERATED by MockBureau (~0.4 s / request), so it can be computed per request. The fairness audit needs the</text>
+<text class="m85" x="24" y="1330">real 167 MB dataset and ~40 s to retrain both ablation variants — no caching makes that a request, and there is no knob to turn: an audit is a population-level fact about a model, not a what-if.</text>
+<text class="m85" x="24" y="1356">sources read: serving/{app, artifacts, bureau, config, errors, fairness, schema}.py · src/explain.py · scripts/{demo_drift, audit_fairness}.py · pipelines/drift_check.py · Dockerfile · .dockerignore · .gitignore</text>
+<text class="m85" x="24" y="1370">traced 2026-07-13 (five routes, CORS, nested credit_report, the staleness gate); labels cite symbols, not line numbers</text>
+</svg>
+</div>
+
+<script>
+async function buildPNG(scale = 2) {
+  // XMLSerializer -> data: URL -> Image -> canvas -> toBlob.
+  // The SVG carries its own <style> and uses no foreignObject, so the
+  // serialized document is self-contained and rasterizes in any browser.
+  const svg = document.getElementById('arch');
+  const xml = new XMLSerializer().serializeToString(svg);
+  const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('SVG rasterization failed'));
+    img.src = url;
+  });
+  const w = svg.viewBox.baseVal.width, h = svg.viewBox.baseVal.height;
+  const canvas = document.createElement('canvas');
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0b0f14';                    // opaque background, not transparent
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+  if (!blob) throw new Error('canvas.toBlob returned null');
+  return { blob, width: canvas.width, height: canvas.height };
+}
+
+document.getElementById('exportBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('exportBtn');
+  try {
+    btn.disabled = true;
+    btn.textContent = 'Rendering…';
+    const { blob } = await buildPNG(2);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'trust-issues-architecture-serving.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    btn.textContent = 'Export as PNG';
+  } catch (e) {
+    btn.textContent = 'Export failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Self-test hook: open with ?autotest — runs the exact export path
+// (serialize -> rasterize -> canvas -> toBlob) minus the download click,
+// and reports the outcome in document.title for headless verification.
+if (location.search.includes('autotest')) {
+  buildPNG(2)
+    .then(r => { document.title = 'EXPORT_OK ' + r.width + 'x' + r.height + ' bytes=' + r.blob.size; })
+    .catch(e => { document.title = 'EXPORT_FAIL ' + e.message; });
+}
+</script>
+</body>
+</html>

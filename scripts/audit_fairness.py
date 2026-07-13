@@ -85,8 +85,26 @@ SCHEMA_VERSION = 1
 
 
 def _records(frame: pd.DataFrame) -> list[dict]:
-    """DataFrame -> JSON rows, with numpy scalars cast to Python types."""
-    return json.loads(frame.to_json(orient="records"))
+    """
+    DataFrame -> JSON rows, with numpy scalars cast to Python types.
+
+    Deliberately NOT frame.to_json(). Pandas defaults to double_precision=10 and
+    silently rounds every float to ten decimal places on the way out. That is
+    harmless for an EO ratio, and fatal for exactly one number in this artifact:
+    SELECTED_THRESHOLD is 0.25000000000000006, and to_json emits it as 0.25 --
+    a genuinely different float (serving/config.py spends a comment on the
+    difference). The sweep row for the operating point then stops == matching the
+    operating point, and a client looking it up finds nothing and quietly falls
+    back to the nearest row, reporting the approval rate at 0.26 as if it were
+    the one we decide at.
+
+    Caught by asserting the lookup rather than eyeballing the JSON. .to_dict()
+    does no rounding; .item() unwraps numpy scalars so json.dumps will take them.
+    """
+    return [
+        {k: (v.item() if hasattr(v, "item") else v) for k, v in row.items()}
+        for row in frame.to_dict(orient="records")
+    ]
 
 
 def build_audit(bundle=None) -> dict:
@@ -110,9 +128,23 @@ def build_audit(bundle=None) -> dict:
     # literal 0.25000000000000006, not 0.25). Auditing at any other cutoff
     # would answer a question nobody asked: "would the model be fair at an
     # operating point we do not use?"
+    # The sweep must CONTAIN the operating point. src/fairness.py's notebook-era
+    # SWEEP_THRESHOLDS is [0.12 ... 0.22, 0.26, 0.30] and does not include
+    # 0.25000000000000006, so a client asking "how many good applicants does the
+    # shipped model approve at the cutoff it actually uses?" would have to read
+    # the NEAREST row (0.26) and call it the operating one. That is a small
+    # say != do -- the answer would be off by a real amount (82.4% at 0.26) and
+    # labelled as if it were exact.
+    #
+    # audit_layer2 takes its thresholds as a parameter, so the fix is to pass the
+    # operating point in rather than to round to it. src/fairness.py is untouched;
+    # its constant remains the notebook's.
+    sweep = sorted(set(SWEEP_THRESHOLDS) | {float(bundle.threshold)})
+
     result = run_fairness_audit(
         splits=splits,
         audit_threshold=bundle.threshold,
+        sweep_thresholds=sweep,
     )
     layer1, layer2, layer3 = result["layer1"], result["layer2"], result["layer3"]
 
@@ -145,7 +177,11 @@ def build_audit(bundle=None) -> dict:
             "eo_threshold": EO_THRESHOLD,
             "min_n": MIN_N,
             "n_boot": N_BOOT,
-            "sweep_thresholds": list(SWEEP_THRESHOLDS),
+            # What the sweep ACTUALLY ran at -- SWEEP_THRESHOLDS plus the
+            # operating point -- not the module constant it was derived from.
+            # Shipping the constant here while having swept something else would
+            # be the same defect in miniature.
+            "sweep_thresholds": sweep,
             "ablation_threshold": ABLATION_THRESHOLD,
             "watch_states": list(WATCH_STATES),
         },

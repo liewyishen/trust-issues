@@ -153,6 +153,53 @@ drift pipeline lazily, because importing it at module scope would pull mlflow an
 reference mean on mount — which pays that cost before you reach for the slider, and fetches the
 baseline it needs anyway.
 
+## Audit fairness
+
+The third tab reads `GET /fairness` — the frozen three-layer audit — and tells it in the order
+the evidence was actually earned. There is **no knob**, and there cannot be one: fairness here is
+a population-level fact about a model, not a what-if.
+
+| | what it shows | why it's there |
+|---|---|---|
+| **1 · Fifty states, zero flags** | Layer 1 on the shipped model, at the threshold `/score` decides at (0.25): 50 states, 50 bootstrap CIs, **0 confirmed** — a wall of green | And it proves almost nothing. At that cutoff the model approves **82.4%** of good applicants; a permissive threshold washes state-level differences out. Leading with the green wall and stopping there is the dishonest version of this screen |
+| **2 · Try to break it** | Layer 2 sweeps 0.12 → 0.30. Approvals fall from 90.5% to 29.6%, and no watched state drops under the line | The all-clear is *stable*, not an artifact of where the cutoff sat. That is what turns "we saw no disparity" into evidence: not the finding, the failed attempt to break it |
+| **3 · The counterfactual** | Layer 3 retrains **with** `addr_state` and **without**, with a 95% bootstrap interval on each side. MS: `0.745 [0.716, 0.774]` → `0.988 [0.962, 1.012]` | The two intervals are **disjoint**, and MS is the only confirmed state with the label in — zero without it. The price: test AUC 0.6690 → 0.6654 |
+
+The 0.80 line is drawn at the `eo_threshold` the response **returns**, on an axis derived from the
+intervals actually being plotted. Nothing here is hardcoded, and nothing is computed in the
+browser — the audit ran offline against the real 1.35M-row CSV.
+
+Colour means the verdict and nothing else (red confirmed / amber inconclusive / green clear). The
+two variants are told apart by **opacity**, not hue — a legend that recoloured a red interval as a
+"with-state" marker would be readable and wrong.
+
+### The audit says where it is weaker than it sounds
+
+Layer 3's own verdict column is decided on **point estimates**, and the intervals disagree with it.
+`NV` reads *"was already clear"* on `eo_with_state = 0.800147` — a verdict turning on the fourth
+decimal — while its CI `[0.782, 0.818]` straddles 0.80 and is honestly *inconclusive*. Same for
+`AL`. That logic is the notebook's and is left exactly as it is; the intervals ship beside it so
+the UI can show the disagreement rather than pick whichever reads better. Trusting a point estimate
+is the specific error this audit exists to refuse, and it is not immune to it.
+
+### `/fairness` can refuse, in two different ways
+
+The audit cannot run in the service: it needs the 167 MB assessment CSV (the first line of
+`.dockerignore` — the brief forbids redistributing it) and ~40s to retrain both ablation variants.
+So `scripts/audit_fairness.py` runs it offline and freezes ~38 KB of derived ratios into
+`models/fairness_audit.json`, which is committed.
+
+A frozen file is the one thing in this service that can go **stale**. So it is bound to the model
+by `trained_at`:
+
+- **404** — no audit artifact on this deployment. Rendered as "isn't available here", with nothing
+  drawn in its place.
+- **409** — *the audit is about a different model.* The service sends **both timestamps and not one
+  ratio**, and the UI shows exactly that.
+
+The 409 withholding the numbers is deliberate, and the UI must not route around it. A screen that
+is handed ratios will draw them, and a reader remembers the chart, not the caveat.
+
 ## The enum lists are generated, not typed
 
 `src/lib/enums.generated.ts` is written by `scripts/generate-enums.py`, which **reads** the

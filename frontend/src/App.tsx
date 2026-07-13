@@ -5,6 +5,7 @@ import { ApplicationForm, NoFicoNote } from "@/components/ApplicationForm"
 import { CompareView } from "@/components/CompareView"
 import { DecisionResult } from "@/components/DecisionResult"
 import { DriftMonitor } from "@/components/DriftMonitor"
+import { FairnessAudit } from "@/components/FairnessAudit"
 import { Failure } from "@/components/Failure"
 import { Button } from "@/components/ui/button"
 import {
@@ -20,18 +21,25 @@ import { INITIAL, isValid, toRequest, validate, type FormState } from "@/lib/for
 import { cn } from "@/lib/utils"
 
 /**
- * Three questions, and they are genuinely different questions -- which is why they
- * are three modes and not three panels on one page.
+ * Four questions, and they are genuinely different questions -- which is why they
+ * are four modes and not four panels on one page.
  *
- *   single  / compare -- about an APPLICANT. What was decided, and why.
- *   drift             -- about a POPULATION. Has the market moved under the model,
- *                        and did the monitor notice?
+ *   single / compare -- about an APPLICANT. What was decided, and why.
+ *   drift            -- about a POPULATION, and about NOW. Has the market moved
+ *                       under the model, and did the monitor notice?
+ *   fairness         -- about the MODEL, and about the PAST. Whom does it get
+ *                       wrong, and what did we do when we found out?
  *
- * The drift tab shares no state with the other two, and needs none: it does not
- * score anybody. It talks to a different endpoint, about a different subject, on a
- * different time scale.
+ * The last two share no state with the first two and need none: they score
+ * nobody. And they differ from each other in a way worth preserving in the code.
+ * /drift is a live wrap of the real monitor, so it has a knob and answers a
+ * what-if. /fairness has no knob and cannot have one: the audit needs the 167 MB
+ * dataset and ~40s, so it runs offline and this tab READS its output. A
+ * population-level fact about a model is not a what-if, and pretending otherwise
+ * would mean recomputing it in the browser -- which is the one thing none of
+ * these tabs do.
  */
-type Mode = "single" | "compare" | "drift"
+type Mode = "single" | "compare" | "drift" | "fairness"
 
 type State =
   | { status: "idle" }
@@ -64,7 +72,11 @@ export default function App() {
     <div
       className={cn(
         "mx-auto min-h-full px-6 py-10 transition-[max-width]",
-        mode === "single" ? "max-w-3xl" : mode === "drift" ? "max-w-5xl" : "max-w-6xl",
+        mode === "single"
+          ? "max-w-3xl"
+          : mode === "drift" || mode === "fairness"
+            ? "max-w-5xl"
+            : "max-w-6xl",
       )}
     >
       <header className="mb-6">
@@ -73,10 +85,11 @@ export default function App() {
           <span className="tnum text-[11px] text-faint">{API_BASE}</span>
         </div>
         <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-muted">
-          A credit-default risk model whose decisions can be checked — and whose monitoring can
-          be watched working. Everything on these pages is returned by the live API: the model,
-          the calibrator, the decision threshold and the drift monitor are all the real ones, and
-          none of their numbers are computed in this browser.
+          A credit-default risk model whose decisions can be checked, whose monitoring can be
+          watched working, and whose fairness audit you can read rather than take on trust.
+          Everything on these pages is returned by the live API: the model, the calibrator, the
+          decision threshold, the drift monitor and the audit are all the real ones, and none of
+          their numbers are computed in this browser.
         </p>
       </header>
 
@@ -90,14 +103,24 @@ export default function App() {
         <Tab active={mode === "drift"} onClick={() => setMode("drift")}>
           Monitor drift
         </Tab>
+        <Tab active={mode === "fairness"} onClick={() => setMode("fairness")}>
+          Audit fairness
+        </Tab>
       </nav>
 
       <main>
         {mode === "single" && <SingleView cal={cal} calError={calError} />}
         {mode === "compare" && <CompareView cal={cal} calError={calError} />}
-        {/* Mounted only while its tab is open, so the ~1.3s warm-up call is paid
-            by the person who asked for it rather than by everyone on page load. */}
+        {/* Mounted only while its tab is open, so the ~0.4s warm-up call is paid
+            by the person who asked for it rather than by everyone on page load.
+            (~0.4s is what the first POST /drift actually costs on a running
+            uvicorn -- NOT the ~1.3s a bare interpreter pays to import the demo,
+            which is a different number measuring a different thing.) */}
         {mode === "drift" && <DriftMonitor />}
+        {/* Fetch-once, no knob: the audit is a population-level fact about a
+            model, not a what-if. Mounted lazily for symmetry, though it is only
+            a ~35 KB file read. */}
+        {mode === "fairness" && <FairnessAudit />}
       </main>
 
       <footer className="mt-10 border-t border-border pt-4 text-[11px] leading-relaxed text-faint">

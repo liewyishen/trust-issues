@@ -145,8 +145,135 @@ export interface DriftResponse {
 }
 
 // --------------------------------------------------------------------------
-// Errors. 422 and 503 are real, documented states of this API (serving/errors.py),
-// not generic failures, so they get their own types rather than a string.
+// serving/schema.py's FairnessResponse. GET /fairness serves the FROZEN
+// three-layer audit (models/fairness_audit.json), produced offline by
+// scripts/audit_fairness.py from the real src/fairness.py.
+//
+// Frozen, not live, and the reason is a hard one: the audit needs the 167 MB
+// assessment CSV -- the first line of .dockerignore, because the brief forbids
+// redistributing it -- and ~40s to retrain both ablation variants. Unlike
+// /drift, no amount of engineering makes it a request. What ships is its
+// OUTPUT: derived aggregate ratios, which are not the dataset.
+//
+// Nothing in this client computes a ratio, a CI, or a verdict. It draws what
+// the audit found.
+// --------------------------------------------------------------------------
+
+/** Which model the audit ran against. `trained_at` is THE binding field: the
+ *  service compares it to the shipped booster's and 409s on mismatch. */
+export interface AuditedModel {
+  trained_at: string | null
+  calibrator_trained_at: string | null
+  best_iteration: number
+  /** The fairness conclusion, executed and checkable rather than asserted in
+   *  prose: the model that made these decisions has no addr_state to lean on. */
+  features: string[]
+  includes_addr_state: boolean
+}
+
+/** src/fairness.py's OWN constants. Draw the 0.80 line HERE and nowhere else --
+ *  the same discipline DriftResponse.thresholds enforces for the alarm line. */
+export interface AuditConstants {
+  eo_threshold: number
+  min_n: number
+  n_boot: number
+  sweep_thresholds: number[]
+  /** 0.22 -- deliberately NOT the operating threshold. Section 9.2's sweep found
+   *  the disparity most visible there, and an ablation wants its comparison where
+   *  the signal is strongest. The divergence is the point, not a mistake. */
+  ablation_threshold: number
+  watch_states: string[]
+}
+
+/** One state's Equal-Opportunity ratio, with the interval around it. The CI is
+ *  the load-bearing part: a point estimate below 0.80 on a finite sample is
+ *  noise, not evidence, which is why Layer 1 bootstraps instead of trusting a
+ *  groupby mean. */
+export interface StateEO {
+  state: string
+  n_good: number
+  eo_ratio: number
+  ci_low: number
+  ci_high: number
+  /** "confirmed (CI fully < 0.80)" | "inconclusive (CI straddles 0.80)" | "clear" */
+  verdict: string
+}
+
+export interface Layer1 {
+  /** SELECTED_THRESHOLD -- the point /score actually decides at. */
+  threshold: number
+  states: StateEO[]
+  n_confirmed: number
+}
+
+/** Each row is {threshold, national_good_approval_rate, ...one key per watch
+ *  state}. The watch-state keys are DERIVED from constants.watch_states, never
+ *  hardcoded here -- typing them as named fields would silently drop a column
+ *  the day src/fairness.py's WATCH_STATES changes. */
+export interface Layer2 {
+  rows: Record<string, number>[]
+}
+
+/** One state on BOTH sides of the ablation, each side with a bootstrap CI. This
+ *  is the pair the audit could not report until Layer 3 started returning its
+ *  Test frames: same applicants, same outcomes, one feature toggled. */
+export interface AblationStateCI {
+  state: string
+  n_good_with_state: number
+  eo_ratio_with_state: number
+  ci_low_with_state: number
+  ci_high_with_state: number
+  verdict_with_state: string
+  n_good_no_state: number
+  eo_ratio_no_state: number
+  ci_low_no_state: number
+  ci_high_no_state: number
+  verdict_no_state: string
+}
+
+/** src/fairness.py's own Layer-3 verdict row -- decided on POINT ESTIMATES, and
+ *  therefore capable of honestly disagreeing with the CI verdicts above. On the
+ *  real data it does: NV reads "was already clear" on eo_with_state = 0.800147,
+ *  a verdict turning on the fourth decimal, while its CI straddles 0.80. Both
+ *  are shipped so the UI can show that rather than pick whichever reads better. */
+export interface AblationWatchState {
+  state: string
+  eo_with_state: number
+  eo_no_state: number
+  shift: number
+  verdict: string
+}
+
+export interface Layer3 {
+  threshold: number
+  auc_with_state: number
+  auc_no_state: number
+  /** NEGATIVE: dropping addr_state costs AUC. That is the price, and it is paid. */
+  auc_cost: number
+  base_approval_with_state: number
+  base_approval_no_state: number
+  watch: AblationWatchState[]
+  states: AblationStateCI[]
+}
+
+export interface FairnessResponse {
+  schema_version: number
+  generated_at: string
+  model: AuditedModel
+  /** Read off the LIVE bundle at request time, not copied from the artifact. It
+   *  is echoed beside model.trained_at so a client can SEE the two agree, rather
+   *  than infer it from the absence of a 409. */
+  shipped_model_trained_at: string | null
+  constants: AuditConstants
+  layer1: Layer1
+  layer2: Layer2
+  layer3: Layer3
+}
+
+// --------------------------------------------------------------------------
+// Errors. 422, 503 and 409 are real, documented states of this API
+// (serving/errors.py, serving/fairness.py), not generic failures, so they get
+// their own types rather than a string.
 // --------------------------------------------------------------------------
 export interface ValidationIssue {
   /** e.g. ["body", "emp_length"] */
@@ -190,6 +317,39 @@ export class NetworkError extends Error {
 }
 
 /**
+ * 409 -- the audit on disk is about a DIFFERENT model than the one being served.
+ *
+ * The only route with this state is /fairness, and it is the price of the audit
+ * being a frozen artifact rather than a live read. /calibrator cannot go stale:
+ * it reads the live bundle, so whatever it returns IS what /score decides with.
+ * A JSON file has no such protection -- retrain the booster and it still
+ * cheerfully reports Mississippi at 0.7448, about a model that no longer exists.
+ *
+ * So the service binds the artifact to the model by `trained_at` (the same
+ * binding load_calibrator() enforces between the calibrator and the booster) and,
+ * on mismatch, sends this: both timestamps and NOT ONE RATIO.
+ *
+ * That the payload carries no numbers is deliberate, and this client must not
+ * treat it as an inconvenience to route around. A client handed stale ratios with
+ * a warning attached WILL draw the ratios. The only reliable way to stop a stale
+ * number being rendered as a current one is to never have it.
+ */
+export class AuditStaleError extends Error {
+  auditModelTrainedAt: string | null
+  shippedModelTrainedAt: string | null
+  constructor(detail: {
+    error?: string
+    audit_model_trained_at?: string | null
+    shipped_model_trained_at?: string | null
+  }) {
+    super(detail.error ?? "The fairness audit does not describe the shipped model.")
+    this.name = "AuditStaleError"
+    this.auditModelTrainedAt = detail.audit_model_trained_at ?? null
+    this.shippedModelTrainedAt = detail.shipped_model_trained_at ?? null
+  }
+}
+
+/**
  * 404 -- the route is not mounted on this deployment.
  *
  * A real, expected state, and the only route that has it today is /drift. It is
@@ -223,6 +383,12 @@ async function handle(res: Response, route: string): Promise<unknown> {
   if (res.status === 404) {
     // The route is not mounted here. See RouteNotAvailableError.
     throw new RouteNotAvailableError(route)
+  }
+  if (res.status === 409) {
+    // /fairness only: the frozen audit describes another model. See AuditStaleError.
+    // The body carries both timestamps and no ratios, by design.
+    const detail = (body.detail ?? {}) as Record<string, string | null>
+    throw new AuditStaleError(detail)
   }
   if (res.status === 422) {
     // FastAPI's RequestValidationError handler: detail is an array of issues,
@@ -322,6 +488,32 @@ export async function getDrift(mean_fico: number): Promise<DriftResponse> {
     throw new NetworkError(`Could not reach the API at ${BASE}.`)
   }
   return (await handle(res, "/drift")) as DriftResponse
+}
+
+/**
+ * GET /fairness. The frozen three-layer audit -- but only if it is about the
+ * model being served.
+ *
+ * Cheap (it is a ~35 KB file read, not a computation) and static for the life of
+ * the deployment, so it is fetched once when the view mounts. There is no knob:
+ * unlike /drift, nothing here is parameterized, because the audit is a
+ * population-level fact about a model, not a what-if. A per-applicant fairness
+ * view is not merely unbuilt -- it is impossible: addr_state is not a ScoreRequest
+ * field, and the shipped model does not carry it as a feature.
+ *
+ * Two failure modes that are NOT bugs, and neither may be papered over:
+ *   404 RouteNotAvailableError -- no audit artifact on this deployment.
+ *   409 AuditStaleError        -- the audit is about a different model. No
+ *                                 numbers are sent, so none can be drawn.
+ */
+export async function getFairness(): Promise<FairnessResponse> {
+  let res: Response
+  try {
+    res = await fetch(`${BASE}/fairness`)
+  } catch {
+    throw new NetworkError(`Could not reach the API at ${BASE}.`)
+  }
+  return (await handle(res, "/fairness")) as FairnessResponse
 }
 
 export const API_BASE = BASE

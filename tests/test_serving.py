@@ -1226,7 +1226,17 @@ def test_the_audits_constants_are_the_audits_own_not_retyped_in_serving(fairness
     assert constants["n_boot"] == N_BOOT
     assert constants["ablation_threshold"] == ABLATION_THRESHOLD
     assert constants["watch_states"] == list(WATCH_STATES)
-    assert constants["sweep_thresholds"] == list(SWEEP_THRESHOLDS)
+
+    # The sweep is the ONE constant the artifact does not ship verbatim, and the
+    # difference is deliberate: scripts/audit_fairness.py adds the operating
+    # threshold, because src/fairness.py's notebook-era list does not contain it
+    # and a sweep that omits the point we decide at cannot answer "what do we
+    # approve at the point we decide at". So: a superset, and specifically THAT
+    # superset -- shipping the module constant here while having swept something
+    # else would be the same say != do in miniature.
+    assert constants["sweep_thresholds"] == sorted(
+        set(SWEEP_THRESHOLDS) | {SELECTED_THRESHOLD}
+    )
 
 
 @SHIPPED
@@ -1378,3 +1388,41 @@ def test_a_broken_fairness_artifact_never_takes_scoring_down(bundle):
         # ...and the service goes right on scoring applicants.
         assert client.post("/score", json=GOOD).status_code == 200, label
         assert client.get("/healthz").status_code == 200, label
+
+
+@SHIPPED
+def test_the_sweep_contains_the_operating_point_exactly_not_nearly(fairness_client):
+    """
+    The Layer-2 sweep must hold a row AT the threshold /score decides at, matching
+    on ==, not "within a tolerance".
+
+    Two things conspire here and both were live defects:
+
+      1. src/fairness.py's SWEEP_THRESHOLDS is the notebook's list and does not
+         contain 0.25000000000000006. scripts/audit_fairness.py adds the operating
+         point to the sweep rather than letting a client round to the nearest row
+         (0.26) and call it the operating one.
+
+      2. pandas' to_json defaults to double_precision=10 and silently rounds
+         0.25000000000000006 to 0.25 -- a genuinely different float. The row was
+         being written, and the lookup for it still failed. scripts/audit_fairness.py's
+         _records() avoids to_json for exactly this reason.
+
+    Neither is visible by reading the JSON: 0.25 and 0.25000000000000006 print the
+    same at any sane precision. Only the == lookup catches it, which is why this
+    asserts the lookup.
+    """
+    body = fairness_client.get("/fairness").json()
+    operating = body["layer1"]["threshold"]
+
+    assert operating == SELECTED_THRESHOLD
+    assert operating in body["constants"]["sweep_thresholds"]
+
+    rows = [r for r in body["layer2"]["rows"] if r["threshold"] == operating]
+    assert len(rows) == 1, (
+        "No sweep row at the operating threshold. A client asking 'what does the "
+        "shipped model approve at the cutoff it actually uses?' would have to round "
+        "to the nearest swept row and report that as the operating point."
+    )
+    # And it is a real approval rate, not a placeholder.
+    assert 0.0 < rows[0]["national_good_approval_rate"] <= 1.0

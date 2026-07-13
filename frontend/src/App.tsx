@@ -1,20 +1,24 @@
+import { Loader2 } from "lucide-react"
 import * as React from "react"
 
-import { ApplicationForm } from "@/components/ApplicationForm"
+import { ApplicationForm, NoFicoNote } from "@/components/ApplicationForm"
+import { CompareView } from "@/components/CompareView"
 import { DecisionResult } from "@/components/DecisionResult"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Failure } from "@/components/Failure"
+import { Button } from "@/components/ui/button"
 import {
-  AdditivityError,
   API_BASE,
-  NetworkError,
-  ServiceUnavailableError,
-  ValidationError,
   getCalibrator,
   scoreApplicant,
   type CalibratorResponse,
   type ScoreRequest,
   type ScoreResponse,
 } from "@/lib/api"
+import { LOAN_MAX, LOAN_MIN, REVENUE_MIN } from "@/lib/enums.generated"
+import { INITIAL, isValid, toRequest, validate, type FormState } from "@/lib/form"
+import { cn } from "@/lib/utils"
+
+type Mode = "single" | "compare"
 
 type State =
   | { status: "idle" }
@@ -22,17 +26,20 @@ type State =
   | { status: "scored"; response: ScoreResponse }
   | { status: "failed"; error: unknown }
 
+const BOUNDS = { REVENUE_MIN, LOAN_MIN, LOAN_MAX }
+
 export default function App() {
-  const [state, setState] = React.useState<State>({ status: "idle" })
+  const [mode, setMode] = React.useState<Mode>("single")
 
   // The calibrator is the same object for every applicant -- it is the SHIPPED
   // artifact, not a per-request computation -- so it is fetched once, on mount,
-  // and reused. It is deliberately NOT bundled into ScoreResponse: /score answers
-  // "what was decided about this applicant", /calibrator answers "what is the
-  // function that decided". Fetching it separately keeps that boundary visible.
+  // and reused by both modes. It is deliberately NOT bundled into ScoreResponse:
+  // /score answers "what was decided about this applicant", /calibrator answers
+  // "what is the function that decided". Fetching it separately keeps that
+  // boundary visible.
   //
-  // Its failure is kept separate from the scoring failure. A dead /calibrator
-  // must not take down a decision that /score already returned successfully.
+  // Its failure is kept separate from a scoring failure. A dead /calibrator must
+  // not take down a decision that /score already returned successfully.
   const [cal, setCal] = React.useState<CalibratorResponse | null>(null)
   const [calError, setCalError] = React.useState<unknown>(null)
 
@@ -40,7 +47,74 @@ export default function App() {
     getCalibrator().then(setCal, setCalError)
   }, [])
 
-  const submit = async (payload: ScoreRequest) => {
+  return (
+    <div
+      className={cn(
+        "mx-auto min-h-full px-6 py-10 transition-[max-width]",
+        mode === "compare" ? "max-w-6xl" : "max-w-3xl",
+      )}
+    >
+      <header className="mb-6">
+        <div className="flex items-baseline justify-between">
+          <h1 className="text-lg font-semibold tracking-tight text-fg">trust-issues</h1>
+          <span className="tnum text-[11px] text-faint">{API_BASE}</span>
+        </div>
+        <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-muted">
+          A credit-default risk model whose decisions can be checked. The forms below score
+          against the live model — the credit score is pulled by the system, and every number on
+          the result is returned by the API, not computed here.
+        </p>
+      </header>
+
+      <nav className="mb-4 flex gap-1 rounded-md border border-border bg-surface p-1">
+        <Tab active={mode === "single"} onClick={() => setMode("single")}>
+          Score one applicant
+        </Tab>
+        <Tab active={mode === "compare"} onClick={() => setMode("compare")}>
+          Compare two
+        </Tab>
+      </nav>
+
+      <main>
+        {mode === "single" ? (
+          <SingleView cal={cal} calError={calError} />
+        ) : (
+          <CompareView cal={cal} calError={calError} />
+        )}
+      </main>
+
+      <footer className="mt-10 border-t border-border pt-4 text-[11px] leading-relaxed text-faint">
+        The bureau is a deterministic mock (<code>MockBureau</code>) — it never calls a real
+        vendor. Everything else on this page is the real model, the real calibrator and the real
+        decision threshold.
+      </footer>
+    </div>
+  )
+}
+
+// ===========================================================================
+
+function SingleView({
+  cal,
+  calError,
+}: {
+  cal: CalibratorResponse | null
+  calError: unknown
+}) {
+  const [form, setForm] = React.useState<FormState>(INITIAL)
+  const [touched, setTouched] = React.useState(false)
+  const [state, setState] = React.useState<State>({ status: "idle" })
+
+  const errors = validate(form, BOUNDS)
+  const ready = isValid(errors)
+  const pending = state.status === "pending"
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setTouched(true)
+    if (!ready) return
+
+    const payload: ScoreRequest = toRequest(form)
     setState({ status: "pending" })
     try {
       setState({ status: "scored", response: await scoreApplicant(payload) })
@@ -50,112 +124,61 @@ export default function App() {
   }
 
   return (
-    <div className="mx-auto min-h-full max-w-3xl px-6 py-10">
-      <header className="mb-8">
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-lg font-semibold tracking-tight text-fg">trust-issues</h1>
-          <span className="tnum text-[11px] text-faint">{API_BASE}</span>
-        </div>
-        <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-muted">
-          A credit-default risk model whose decisions can be checked. The form below scores
-          against the live model — the credit score is pulled by the system, and every
-          number on the result is returned by the API, not computed here.
-        </p>
-      </header>
+    <form onSubmit={submit} className="space-y-4">
+      <ApplicationForm
+        idPrefix="one"
+        title="Loan application"
+        value={form}
+        onChange={setForm}
+        errors={errors}
+        showErrors={touched}
+        disabled={pending}
+        footer={
+          <div className="space-y-4">
+            <NoFicoNote />
+            <Button type="submit" disabled={pending} className="w-full">
+              {pending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Pulling credit report and scoring…
+                </>
+              ) : (
+                "Score applicant"
+              )}
+            </Button>
+          </div>
+        }
+      />
 
-      <main className="space-y-4">
-        <ApplicationForm onSubmit={submit} pending={state.status === "pending"} />
-
-        {state.status === "failed" && <Failure error={state.error} />}
-        {state.status === "scored" && (
-          <DecisionResult r={state.response} cal={cal} calError={calError} />
-        )}
-      </main>
-
-      <footer className="mt-10 border-t border-border pt-4 text-[11px] leading-relaxed text-faint">
-        The bureau is a deterministic mock (<code>MockBureau</code>) — it never calls a real
-        vendor. Everything else on this page is the real model, the real calibrator and the
-        real decision threshold.
-      </footer>
-    </div>
+      {state.status === "failed" && <Failure error={state.error} />}
+      {state.status === "scored" && (
+        <DecisionResult r={state.response} cal={cal} calError={calError} />
+      )}
+    </form>
   )
 }
 
-/**
- * 422 and 503 are documented states of this API (serving/errors.py), not
- * generic failures, so each is rendered as itself rather than as "something
- * went wrong".
- */
-function Failure({ error }: { error: unknown }) {
-  if (error instanceof ValidationError) {
-    return (
-      <Alert variant="invalid">
-        <AlertTitle>422 — the request was refused by the validation contract</AlertTitle>
-        <AlertDescription className="space-y-2">
-          <p>
-            The applicant did nothing wrong; the request carried something the API does not
-            accept. It rejects rather than silently coercing — a value it had to guess at
-            would be a decision made on data nobody chose.
-          </p>
-          <ul className="space-y-1.5">
-            {error.issues.map((issue, i) => (
-              <li
-                key={i}
-                className="rounded border border-border bg-surface px-2.5 py-1.5"
-              >
-                <span className="tnum text-[11px] text-reject">
-                  {issue.loc.filter((p) => p !== "body").join(".") || "request"}
-                </span>
-                <span className="ml-2 text-[12px] text-muted">{issue.msg}</span>
-              </li>
-            ))}
-          </ul>
-        </AlertDescription>
-      </Alert>
-    )
-  }
-
-  if (error instanceof ServiceUnavailableError) {
-    return (
-      <Alert variant="unavailable">
-        <AlertTitle>503 — the service is not ready</AlertTitle>
-        <AlertDescription>
-          {error.detail} The API refuses to serve rather than score with artifacts it could
-          not verify at startup. No decision was made.
-        </AlertDescription>
-      </Alert>
-    )
-  }
-
-  if (error instanceof AdditivityError) {
-    return (
-      <Alert variant="invalid">
-        <AlertTitle>500 — the explanation failed its consistency check</AlertTitle>
-        <AlertDescription>
-          {error.detail} The contributions did not reconstruct the model's own score, so the
-          service refused to return a decision at all. A decision without a valid
-          explanation is worse than no decision.
-        </AlertDescription>
-      </Alert>
-    )
-  }
-
-  if (error instanceof NetworkError) {
-    return (
-      <Alert variant="unavailable">
-        <AlertTitle>The API is unreachable</AlertTitle>
-        <AlertDescription>
-          {error.message} Start it with{" "}
-          <code className="text-muted">uv run uvicorn serving.app:app --reload</code>.
-        </AlertDescription>
-      </Alert>
-    )
-  }
-
+function Tab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
   return (
-    <Alert variant="unavailable">
-      <AlertTitle>Unexpected failure</AlertTitle>
-      <AlertDescription>{String(error)}</AlertDescription>
-    </Alert>
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex-1 rounded px-3 py-1.5 text-[12px] font-medium transition-colors",
+        active
+          ? "bg-surface-2 text-fg"
+          : "text-faint hover:text-muted",
+      )}
+    >
+      {children}
+    </button>
   )
 }

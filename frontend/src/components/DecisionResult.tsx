@@ -10,6 +10,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import type { CalibratorResponse, ScoreResponse } from "@/lib/api"
+import { toPlotPoint } from "@/lib/calibrator"
 import { cn } from "@/lib/utils"
 
 /*
@@ -46,7 +47,7 @@ export function DecisionResult({
       <CreditReportTier report={r.credit_report} />
       <DecisionTier r={r} cal={cal} />
       {cal ? (
-        <CalibratorExplainer r={r} cal={cal} />
+        <CalibratorExplainer points={[toPlotPoint(r, "", "this applicant")]} cal={cal} />
       ) : calError ? (
         <CalibratorUnavailable error={calError} />
       ) : null}
@@ -60,7 +61,7 @@ export function DecisionResult({
  * calibrator is missing, and saying so beats quietly dropping the panel, which
  * would leave a reader believing they had seen the whole page.
  */
-function CalibratorUnavailable({ error }: { error: unknown }) {
+export function CalibratorUnavailable({ error }: { error: unknown }) {
   return (
     <Card>
       <CardContent className="py-4">
@@ -83,7 +84,7 @@ function CalibratorUnavailable({ error }: { error: unknown }) {
 // TIER 1 -- the credit report the SYSTEM fetched. The applicant never touched
 // this number, and that is the entire point of the panel.
 // ===========================================================================
-function CreditReportTier({ report }: { report: ScoreResponse["credit_report"] }) {
+export function CreditReportTier({ report }: { report: ScoreResponse["credit_report"] }) {
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
@@ -135,7 +136,7 @@ function Provenance({ label, value }: { label: string; value: string }) {
 // ===========================================================================
 // TIER 2 -- the decision, and the principal adverse factors behind it.
 // ===========================================================================
-function DecisionTier({ r, cal }: { r: ScoreResponse; cal: CalibratorResponse | null }) {
+export function DecisionTier({ r, cal }: { r: ScoreResponse; cal: CalibratorResponse | null }) {
   const approved = r.decision === "APPROVE"
 
   return (
@@ -276,7 +277,7 @@ function ReasonCodes({ codes }: { codes: ScoreResponse["reason_codes"] }) {
 // TIER 3 -- collapsed by default. The proof that the explanation and the
 // decision are the same object seen twice.
 // ===========================================================================
-function TechnicalTier({ r }: { r: ScoreResponse }) {
+export function TechnicalTier({ r }: { r: ScoreResponse }) {
   const [open, setOpen] = React.useState(false)
 
   const contributions = Object.entries(r.contributions_log_odds).sort(

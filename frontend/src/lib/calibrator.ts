@@ -24,10 +24,36 @@
  * reader does not have to take that paragraph's word for it.
  */
 
-import type { CalibratorResponse } from "@/lib/api"
+import type { CalibratorResponse, ScoreResponse } from "@/lib/api"
 
 /** Where a p_raw falls, in the calibrator's own terms. */
 export type Region = "clipped-low" | "flat" | "ramp" | "clipped-high"
+
+/**
+ * An applicant, as the calibrator plot needs them.
+ *
+ * p_raw and p_calibrated are the API's OWN numbers, off the ScoreResponse --
+ * copied, never recomputed. Only the exploratory probe is evaluated in the
+ * browser, and that is a reading of the server's curve rather than a score.
+ */
+export interface PlotPoint {
+  /** "" in single mode; "A" / "B" in compare. Drawn beside the marker. */
+  id: string
+  label: string
+  p_raw: number
+  p_calibrated: number
+  decision: "APPROVE" | "REJECT"
+}
+
+export function toPlotPoint(r: ScoreResponse, id: string, label: string): PlotPoint {
+  return {
+    id,
+    label,
+    p_raw: r.p_raw,
+    p_calibrated: r.p_calibrated,
+    decision: r.decision,
+  }
+}
 
 export interface Reading {
   p_raw: number

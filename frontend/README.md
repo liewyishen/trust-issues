@@ -42,6 +42,53 @@ deferral (`docs/design.md`), not an oversight. When the API is eventually deploy
 this UI at it is a one-line change — set `VITE_API_BASE` in `.env` and rebuild. Nothing else
 in this app knows the URL.
 
+## Compare two applicants
+
+The **Compare two** tab scores two applicants against the real `/score` and shows what the
+difference between them did. It exists because the interesting question about this model is
+almost never "what is this applicant's probability" — it is "what did *changing that* do".
+
+The move it makes cheap: **copy A → B, change exactly one field, score both.** That is a
+ceteris-paribus comparison, and the view says so — it counts the differing fields and tells you
+when there is more than one, because with two levers pulled at once no result is attributable
+to either.
+
+`applicant_id` is the exception it warns about loudly. It is not a model feature — it is the
+bureau's key, and `MockBureau` hashes it to seed the FICO draw. Change it and you have changed
+the credit score too, so the comparison is no longer ceteris paribus. The view detects that and
+says it, with both FICOs shown, rather than letting you credit the outcome to whatever else you
+edited.
+
+**The headline is positional.** Both applicants are plotted on one calibrator chart. When they
+land on the same flat block you see them standing on it together, and the summary states the
+thing the chart shows:
+
+> **The log-odds moved. The probability did not.**
+
+Which is not a bug and not a rounding artifact. Changing `home_ownership` from `RENT` to `OTHER`
+moves the raw margin by `−0.075518` log-odds and moves `home_ownership_n`'s own contribution
+from `+0.062703` to `−0.026266` — the model saw the change perfectly well. Both applicants still
+land on block `#47`, a flat block, where `dp_cal/dp_raw` is exactly `0`. So `p_calibrated` is
+`46.60%` for both and the decision cannot tell them apart. **This is what "attribution in
+probability points is undefined" looks like from the outside: there are no probability points to
+assign, because the probability did not move at all.**
+
+Everything in the diff is in **log-odds**, and there is no probability-point delta anywhere in
+it. Same reason as everywhere else in this app.
+
+Two traps the comparison is careful about, because both would otherwise mislead:
+
+- **A dropped reason code is not a demoted one.** When `home_ownership_n`'s contribution turns
+  *negative*, it does not fall in rank — it stops being a principal adverse factor at all,
+  because an adverse-action notice can only name factors that pushed the applicant *toward*
+  default. The view says that, rather than letting a vanishing row read as a glitch.
+- **A moved contribution is not a moved input.** SHAP attributes over the whole feature vector,
+  so editing `dti_n` shifts what `fico_n` gets credited with — `1.389652 → 1.277808` — while the
+  FICO itself is *bit-identical* (`631.6342719875626`, same applicant id, same bureau pull). Any
+  feature whose input was the same in A and B is tagged **`input unchanged`** in the delta table.
+  Without that tag a reader would see `fico_n  Δ −0.11` and conclude the bureau returned a
+  different score. It did not.
+
 ## The enum lists are generated, not typed
 
 `src/lib/enums.generated.ts` is written by `scripts/generate-enums.py`, which **reads** the

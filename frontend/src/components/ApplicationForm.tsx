@@ -1,4 +1,4 @@
-import { Loader2, Shuffle } from "lucide-react"
+import { Shuffle } from "lucide-react"
 import * as React from "react"
 
 import { Button } from "@/components/ui/button"
@@ -11,18 +11,28 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { ScoreRequest } from "@/lib/api"
 import {
   EMP_ORDER,
-  LOAN_MAX,
-  LOAN_MIN,
-  REVENUE_MIN,
   VALID_HOME_OWNERSHIP,
   VALID_PURPOSE,
 } from "@/lib/enums.generated"
+import {
+  NOT_DISCLOSED,
+  randomApplicantId,
+  type FormState,
+} from "@/lib/form"
+import { cn } from "@/lib/utils"
 
 /**
  * The six applicant-reported fields, plus applicant_id.
+ *
+ * CONTROLLED, and deliberately so: the compare view renders TWO of these, and a
+ * "copy A -> B" button has to be able to write one form's state into the other.
+ * That is impossible if the state lives in here. State, validation and the
+ * mapping onto ScoreRequest therefore live in lib/form.ts -- one copy, two
+ * instances. Forking a second form to get a second applicant would give the field
+ * list, the coercion rules and the enum wiring a second home, and the second home
+ * is the one that goes stale.
  *
  * There is NO FICO input, and its absence is the design, not an omission: the
  * service fetches fico_n from the credit bureau at scoring time
@@ -31,140 +41,78 @@ import {
  * could state their own FICO could describe an applicant whose score never came
  * from a bureau pull.
  *
- * The three closed-enum fields are Selects, never text inputs. serving/schema.py
- * measures why: an arbitrary unmapped string for emp_length encodes IDENTICALLY
- * to null and to "bogus" once add_features() has run -- all three collapse to
- * (emp_length_ord=NaN, emp_length_missing=0), a combination that occurs in 0 of
- * Train's 453,804 rows. A dropdown is what makes that state unreachable from the
- * UI, rather than merely rejected after the fact.
+ * The three closed-enum fields are Selects, never text inputs, and their options
+ * come from enums.generated.ts -- read out of src/data_validation.py and
+ * src/features.py by scripts/generate-enums.py, never hand-typed here.
+ * serving/schema.py measures why the dropdown matters: an arbitrary unmapped
+ * string for emp_length encodes IDENTICALLY to null and to "bogus" once
+ * add_features() has run -- all three collapse to (emp_length_ord=NaN,
+ * emp_length_missing=0), a combination occurring in 0 of Train's 453,804 rows. A
+ * dropdown makes that state unreachable from the UI rather than merely rejected
+ * after the fact.
  */
 
-/** The sentinel this form uses for "the user chose Not disclosed". It is not a
- *  value the API sees: it is mapped to JSON null on submit, which the backend's
- *  validator normalizes to "NI". Radix Select cannot carry a null item value,
- *  hence a local sentinel rather than an empty string (which would be
- *  indistinguishable from "nothing selected yet"). */
-const NOT_DISCLOSED = "__not_disclosed__"
-
-interface FormState {
-  applicant_id: string
-  revenue: string
-  dti_n: string
-  loan_amnt: string
-  emp_length: string
-  purpose: string
-  home_ownership_n: string
-}
-
-const INITIAL: FormState = {
-  applicant_id: "demo-001",
-  revenue: "65000",
-  dti_n: "18",
-  loan_amnt: "10000",
-  emp_length: "5 years",
-  purpose: "debt_consolidation",
-  home_ownership_n: "RENT",
-}
-
-function randomApplicantId(): string {
-  // MockBureau hashes applicant_id with SHA-256 to seed the draw, so the id is
-  // the only thing that varies the pull. Any string works; this one is legible.
-  const n = Math.floor(Math.random() * 1_000_000)
-    .toString()
-    .padStart(6, "0")
-  return `applicant-${n}`
-}
-
-/** Numeric fields arrive from the DOM as strings. ScoreRequest's floats are
- *  Field(strict=True) -- the API accepts 700 and 700.0 and REJECTS "700" with a
- *  422. So the string is converted here, and an unconvertible one never leaves
- *  the browser: a NaN on the wire would be a client bug dressed up as an
- *  applicant. */
-function numeric(raw: string): number | null {
-  const trimmed = raw.trim()
-  if (trimmed === "") return null
-  const n = Number(trimmed)
-  return Number.isFinite(n) ? n : null
-}
-
-function validate(f: FormState): Partial<Record<keyof FormState, string>> {
-  const errors: Partial<Record<keyof FormState, string>> = {}
-
-  if (f.applicant_id.trim() === "") errors.applicant_id = "Required — the bureau is keyed on it."
-
-  const revenue = numeric(f.revenue)
-  if (revenue === null) errors.revenue = "Enter a number."
-  else if (revenue < REVENUE_MIN) errors.revenue = `Must be at least ${REVENUE_MIN}.`
-
-  const dti = numeric(f.dti_n)
-  if (dti === null) errors.dti_n = "Enter a number."
-  else if (dti < 0) errors.dti_n = "DTI is never negative."
-
-  const loan = numeric(f.loan_amnt)
-  if (loan === null) errors.loan_amnt = "Enter a number."
-  else if (loan < LOAN_MIN || loan > LOAN_MAX)
-    errors.loan_amnt = `Must be between ${LOAN_MIN} and ${LOAN_MAX}.`
-
-  return errors
-}
-
 interface Props {
-  onSubmit: (payload: ScoreRequest) => void
-  pending: boolean
+  value: FormState
+  onChange: (next: FormState) => void
+  errors: Partial<Record<keyof FormState, string>>
+  /** Parent decides when errors become visible (on submit, not on first keypress). */
+  showErrors: boolean
+  disabled?: boolean
+  title: string
+  /** Prefixes every DOM id. Two forms on one page must not collide on `htmlFor`,
+   *  or clicking B's label focuses A's input. */
+  idPrefix: string
+  /** Fields to mark as differing from the other applicant. Compare view only. */
+  highlight?: Array<keyof FormState>
+  /** Rendered in the card header, right-aligned (an A/B badge, a copy button). */
+  headerRight?: React.ReactNode
+  /** Rendered at the foot of the card (the submit button, in single mode). */
+  footer?: React.ReactNode
 }
 
-export function ApplicationForm({ onSubmit, pending }: Props) {
-  const [form, setForm] = React.useState<FormState>(INITIAL)
-  const [touched, setTouched] = React.useState(false)
-  const [showAdvanced, setShowAdvanced] = React.useState(false)
+export function ApplicationForm({
+  value,
+  onChange,
+  errors,
+  showErrors,
+  disabled,
+  title,
+  idPrefix,
+  highlight = [],
+  headerRight,
+  footer,
+}: Props) {
+  const [showId, setShowId] = React.useState(false)
 
-  const errors = validate(form)
-  const valid = Object.keys(errors).length === 0
+  const set = <K extends keyof FormState>(key: K, v: string) =>
+    onChange({ ...value, [key]: v })
 
-  const set = <K extends keyof FormState>(key: K, value: string) =>
-    setForm((f) => ({ ...f, [key]: value }))
-
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault()
-    setTouched(true)
-    if (!valid) return
-
-    onSubmit({
-      applicant_id: form.applicant_id.trim(),
-      // Non-null asserted only because `valid` already proved each parses.
-      revenue: numeric(form.revenue)!,
-      dti_n: numeric(form.dti_n)!,
-      loan_amnt: numeric(form.loan_amnt)!,
-      // "Not disclosed" -> JSON null. The backend normalizes null to "NI",
-      // which is where the model has 453,804 rows of support. This is a real
-      // answer, not a missing one.
-      emp_length: form.emp_length === NOT_DISCLOSED ? null : form.emp_length,
-      purpose: form.purpose,
-      home_ownership_n: form.home_ownership_n,
-    })
-  }
-
-  const err = (k: keyof FormState) => (touched ? errors[k] : undefined)
+  const err = (k: keyof FormState) => (showErrors ? errors[k] : undefined)
+  const lit = (k: keyof FormState) => highlight.includes(k)
+  const id = (k: string) => `${idPrefix}-${k}`
 
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
-        <CardTitle>Loan application</CardTitle>
-        <span className="text-[11px] text-faint">6 applicant-reported fields</span>
+        <CardTitle>{title}</CardTitle>
+        {headerRight ?? <span className="text-[11px] text-faint">6 applicant-reported fields</span>}
       </CardHeader>
 
       <CardContent>
-        <form onSubmit={submit} className="space-y-5">
+        <fieldset disabled={disabled} className="space-y-5">
           {/* ---- applicant_id: the bureau key, not a model feature ---- */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="applicant_id">Applicant</Label>
+              <Label htmlFor={id("applicant_id")} lit={lit("applicant_id")}>
+                Applicant
+              </Label>
               <button
                 type="button"
-                onClick={() => setShowAdvanced((s) => !s)}
+                onClick={() => setShowId((s) => !s)}
                 className="text-[11px] text-faint underline-offset-2 hover:text-muted hover:underline"
               >
-                {showAdvanced ? "hide id" : "enter id manually"}
+                {showId ? "hide id" : "enter id manually"}
               </button>
             </div>
 
@@ -176,26 +124,31 @@ export function ApplicationForm({ onSubmit, pending }: Props) {
                 className="shrink-0"
               >
                 <Shuffle className="h-3.5 w-3.5" />
-                Generate applicant
+                Generate
               </Button>
-              {showAdvanced ? (
+              {showId ? (
                 <Input
-                  id="applicant_id"
-                  value={form.applicant_id}
+                  id={id("applicant_id")}
+                  value={value.applicant_id}
                   onChange={(e) => set("applicant_id", e.target.value)}
-                  className="tnum"
+                  className={cn("tnum", lit("applicant_id") && "border-adverse")}
                   placeholder="applicant-000000"
                 />
               ) : (
-                <div className="flex h-9 flex-1 items-center rounded-md border border-border bg-surface-2 px-3">
-                  <span className="tnum text-sm text-muted">{form.applicant_id}</span>
+                <div
+                  className={cn(
+                    "flex h-9 flex-1 items-center rounded-md border bg-surface-2 px-3",
+                    lit("applicant_id") ? "border-adverse" : "border-border",
+                  )}
+                >
+                  <span className="tnum truncate text-sm text-muted">{value.applicant_id}</span>
                 </div>
               )}
             </div>
             <FieldError msg={err("applicant_id")} />
             <p className="text-[11px] leading-relaxed text-faint">
-              The bureau is deterministic — the <em>same</em> applicant id always returns
-              the same credit report, so a demo can be reproduced exactly.
+              The bureau is deterministic — the <em>same</em> applicant id always returns the
+              same credit report, so a demo can be reproduced exactly.
             </p>
           </div>
 
@@ -203,46 +156,46 @@ export function ApplicationForm({ onSubmit, pending }: Props) {
 
           {/* ---- the three numerics ---- */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Annual revenue" htmlFor="revenue" error={err("revenue")}>
+            <Field label="Annual revenue" htmlFor={id("revenue")} error={err("revenue")} lit={lit("revenue")}>
               <Input
-                id="revenue"
+                id={id("revenue")}
                 type="number"
                 inputMode="decimal"
-                value={form.revenue}
+                value={value.revenue}
                 onChange={(e) => set("revenue", e.target.value)}
+                className={cn(lit("revenue") && "border-adverse")}
               />
             </Field>
 
-            <Field label="DTI" htmlFor="dti_n" error={err("dti_n")} hint="debt-to-income">
+            <Field label="DTI" htmlFor={id("dti_n")} error={err("dti_n")} hint="debt-to-income" lit={lit("dti_n")}>
               <Input
-                id="dti_n"
+                id={id("dti_n")}
                 type="number"
                 inputMode="decimal"
                 step="0.01"
-                value={form.dti_n}
+                value={value.dti_n}
                 onChange={(e) => set("dti_n", e.target.value)}
+                className={cn(lit("dti_n") && "border-adverse")}
               />
             </Field>
 
-            <Field label="Loan amount" htmlFor="loan_amnt" error={err("loan_amnt")}>
+            <Field label="Loan amount" htmlFor={id("loan_amnt")} error={err("loan_amnt")} lit={lit("loan_amnt")}>
               <Input
-                id="loan_amnt"
+                id={id("loan_amnt")}
                 type="number"
                 inputMode="decimal"
-                value={form.loan_amnt}
+                value={value.loan_amnt}
                 onChange={(e) => set("loan_amnt", e.target.value)}
+                className={cn(lit("loan_amnt") && "border-adverse")}
               />
             </Field>
           </div>
 
           {/* ---- the three closed enums ---- */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Employment length" htmlFor="emp_length">
-              <Select
-                value={form.emp_length}
-                onValueChange={(v) => set("emp_length", v)}
-              >
-                <SelectTrigger id="emp_length">
+            <Field label="Employment length" htmlFor={id("emp_length")} lit={lit("emp_length")}>
+              <Select value={value.emp_length} onValueChange={(v) => set("emp_length", v)}>
+                <SelectTrigger id={id("emp_length")} className={cn(lit("emp_length") && "border-adverse")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -260,9 +213,9 @@ export function ApplicationForm({ onSubmit, pending }: Props) {
               </Select>
             </Field>
 
-            <Field label="Purpose" htmlFor="purpose">
-              <Select value={form.purpose} onValueChange={(v) => set("purpose", v)}>
-                <SelectTrigger id="purpose">
+            <Field label="Purpose" htmlFor={id("purpose")} lit={lit("purpose")}>
+              <Select value={value.purpose} onValueChange={(v) => set("purpose", v)}>
+                <SelectTrigger id={id("purpose")} className={cn(lit("purpose") && "border-adverse")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -275,12 +228,15 @@ export function ApplicationForm({ onSubmit, pending }: Props) {
               </Select>
             </Field>
 
-            <Field label="Home ownership" htmlFor="home_ownership_n">
+            <Field label="Home ownership" htmlFor={id("home_ownership_n")} lit={lit("home_ownership_n")}>
               <Select
-                value={form.home_ownership_n}
+                value={value.home_ownership_n}
                 onValueChange={(v) => set("home_ownership_n", v)}
               >
-                <SelectTrigger id="home_ownership_n">
+                <SelectTrigger
+                  id={id("home_ownership_n")}
+                  className={cn(lit("home_ownership_n") && "border-adverse")}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -294,28 +250,8 @@ export function ApplicationForm({ onSubmit, pending }: Props) {
             </Field>
           </div>
 
-          <Divider />
-
-          {/* ---- the point of the whole form ---- */}
-          <div className="rounded-md border border-border bg-surface-2/50 px-3 py-2.5">
-            <p className="text-[12px] leading-relaxed text-muted">
-              <span className="text-fg">FICO is not entered here.</span> It is fetched from
-              the credit bureau at scoring time and returned with the decision — the lender
-              pulls the score, the applicant does not claim it.
-            </p>
-          </div>
-
-          <Button type="submit" disabled={pending} className="w-full">
-            {pending ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Pulling credit report and scoring…
-              </>
-            ) : (
-              "Score applicant"
-            )}
-          </Button>
-        </form>
+          {footer}
+        </fieldset>
       </CardContent>
     </Card>
   )
@@ -323,9 +259,20 @@ export function ApplicationForm({ onSubmit, pending }: Props) {
 
 // ---------------------------------------------------------------------------
 
-function Label({ children, htmlFor }: { children: React.ReactNode; htmlFor?: string }) {
+function Label({
+  children,
+  htmlFor,
+  lit,
+}: {
+  children: React.ReactNode
+  htmlFor?: string
+  lit?: boolean
+}) {
   return (
-    <label htmlFor={htmlFor} className="text-xs font-medium text-muted">
+    <label
+      htmlFor={htmlFor}
+      className={cn("text-xs font-medium", lit ? "text-adverse" : "text-muted")}
+    >
       {children}
     </label>
   )
@@ -336,19 +283,24 @@ function Field({
   htmlFor,
   hint,
   error,
+  lit,
   children,
 }: {
   label: string
   htmlFor: string
   hint?: string
   error?: string
+  lit?: boolean
   children: React.ReactNode
 }) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-baseline gap-1.5">
-        <Label htmlFor={htmlFor}>{label}</Label>
+        <Label htmlFor={htmlFor} lit={lit}>
+          {label}
+        </Label>
         {hint && <span className="text-[10px] text-faint">{hint}</span>}
+        {lit && <span className="text-[10px] text-adverse">changed</span>}
       </div>
       {children}
       <FieldError msg={error} />
@@ -363,4 +315,18 @@ function FieldError({ msg }: { msg?: string }) {
 
 function Divider() {
   return <div className="h-px bg-border" />
+}
+
+/** The point of the whole form, said out loud. Rendered by the caller so the
+ *  compare view can show it once rather than twice. */
+export function NoFicoNote() {
+  return (
+    <div className="rounded-md border border-border bg-surface-2/50 px-3 py-2.5">
+      <p className="text-[12px] leading-relaxed text-muted">
+        <span className="text-fg">FICO is not entered here.</span> It is fetched from the credit
+        bureau at scoring time and returned with the decision — the lender pulls the score, the
+        applicant does not claim it.
+      </p>
+    </div>
+  )
 }

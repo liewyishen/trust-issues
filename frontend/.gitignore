@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.env.local
+
+# Generated from the Python value sets by scripts/generate-enums.py, which runs
+# automatically before `dev` and `build`. It is checked in ANYWAY -- a reader
+# cloning the repo should be able to see the enum contract the UI enforces
+# without having to run the generator first. It is regenerated, not hand-edited.
+# (intentionally NOT ignored: src/lib/enums.generated.ts)

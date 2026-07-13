@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/*
+ * Dark data-interface. Colour carries meaning and nothing else -- the same rule
+ * docs/architecture.html states for the pipeline diagram, applied to the UI:
+ *
+ *   green   = APPROVE       red = REJECT
+ *   amber   = a risk-INCREASING contribution (a reason code)
+ *   nothing else is coloured. No decorative gradients, no illustration.
+ *
+ * Numeric type is tabular everywhere it matters: figures must align in a column
+ * so a reader compares magnitudes by eye instead of re-reading digits.
+ */
+
+@theme {
+  --color-bg: oklch(0.17 0.005 260);
+  --color-surface: oklch(0.21 0.006 260);
+  --color-surface-2: oklch(0.25 0.007 260);
+  --color-border: oklch(0.31 0.008 260);
+  --color-border-strong: oklch(0.40 0.010 260);
+
+  --color-fg: oklch(0.96 0.003 260);
+  --color-muted: oklch(0.70 0.010 260);
+  --color-faint: oklch(0.56 0.012 260);
+
+  --color-approve: oklch(0.74 0.16 150);
+  --color-approve-dim: oklch(0.30 0.06 150);
+  --color-reject: oklch(0.68 0.18 22);
+  --color-reject-dim: oklch(0.30 0.08 22);
+  --color-adverse: oklch(0.78 0.13 75);
+
+  --font-mono: "JetBrains Mono", "SF Mono", "Menlo", ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+/* Every figure in this app that a reader might compare against another figure. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}

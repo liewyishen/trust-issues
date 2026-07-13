@@ -58,14 +58,25 @@ body {
 }
 
 /*
- * The p_raw probe. Its step is 1e-6 -- a million positions across ~600px, so one
- * pixel of travel is ~1600 steps. The calibrator's ramps are 9e-09 to 1.5e-03
- * wide, i.e. every one of them is narrower than a pixel. Dragging therefore
- * CANNOT land on a ramp in practice, which is not a defect of the control: it is
- * the artifact's discreteness, felt. The jump buttons beside it exist so a ramp
- * can be inspected deliberately, since it cannot be reached by accident.
+ * The two range controls in this app share one look, and nothing else. They are
+ * listed together here because duplicating the thumb/track rules would be two
+ * places for the same control to stop looking like itself.
+ *
+ * .cal-slider -- the p_raw probe. Its step is 1e-6: a million positions across
+ * ~600px, so one pixel of travel is ~1600 steps. The calibrator's ramps are
+ * 9e-09 to 1.5e-03 wide, i.e. every one of them is narrower than a pixel.
+ * Dragging therefore CANNOT land on a ramp in practice, which is not a defect of
+ * the control -- it is the artifact's discreteness, felt. The jump buttons beside
+ * it exist so a ramp can be inspected deliberately, since it cannot be reached by
+ * accident.
+ *
+ * .drift-slider -- the market's mean FICO. Steps in whole points across 640-710,
+ * which is the opposite situation: every position is reachable and every one of
+ * them is a real request to the real monitor. It is debounced on settle rather
+ * than throttled per pixel, so a drag across the range is a handful of calls.
  */
-.cal-slider {
+.cal-slider,
+.drift-slider {
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
@@ -74,7 +85,8 @@ body {
   border: 1px solid var(--color-border);
   outline: none;
 }
-.cal-slider::-webkit-slider-thumb {
+.cal-slider::-webkit-slider-thumb,
+.drift-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 14px;
@@ -84,10 +96,12 @@ body {
   border: 2px solid var(--color-bg);
   cursor: grab;
 }
-.cal-slider::-webkit-slider-thumb:active {
+.cal-slider::-webkit-slider-thumb:active,
+.drift-slider::-webkit-slider-thumb:active {
   cursor: grabbing;
 }
-.cal-slider::-moz-range-thumb {
+.cal-slider::-moz-range-thumb,
+.drift-slider::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 999px;
@@ -95,6 +109,7 @@ body {
   border: 2px solid var(--color-bg);
   cursor: grab;
 }
-.cal-slider:focus-visible {
+.cal-slider:focus-visible,
+.drift-slider:focus-visible {
   border-color: var(--color-border-strong);
 }

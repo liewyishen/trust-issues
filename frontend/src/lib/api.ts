@@ -92,6 +92,59 @@ export interface CalibratorResponse {
 }
 
 // --------------------------------------------------------------------------
+// serving/schema.py's DriftResponse. POST /drift turns MockBureau's mean_fico
+// knob and returns what pipelines/drift_check.py -- the REAL monitor, the one the
+// batch job runs -- made of the shifted population.
+//
+// Nothing in this client computes a PSI. It could not do so honestly: PSI needs
+// the reference population's quantile bin edges, and those live in the monitor.
+// Every number below is the monitor's own.
+// --------------------------------------------------------------------------
+export interface FeatureDrift {
+  psi: number
+  ks: number
+  /** evaluate_alarms()'s verdict on THIS column's psi and ks -- not a re-test of
+   *  psi against a threshold. The monitor alarms on EITHER signal crossing, and
+   *  the two do not cross together: ks is the more sensitive of the pair and
+   *  fires first (measured: ks crosses at mean_fico ~691, psi at ~677). So a
+   *  feature can be `alarmed` with its PSI still under the line, and the UI must
+   *  not present `alarmed` as if it meant "PSI crossed". */
+  alarmed: boolean
+}
+
+export interface DriftResponse {
+  /** the knob, as requested */
+  mean_fico: number
+  reference_mean_fico: number
+  /** what the batch actually DREW. MockBureau clips into [FICO_MIN, FICO_MAX],
+   *  so this can differ from the requested mean -- showing only the request
+   *  would hide the clipping at exactly the settings where it dominates. */
+  observed_mean_fico_reference: number
+  observed_mean_fico_current: number
+  /** MONITOR SLICE LABELS (2015/2016), not real years, and not a claim about
+   *  real LendingClub data. Returned so the flat `metrics` keys can be built
+   *  (psi_fico_n_2016, ...) instead of hardcoding a year. */
+  reference_year: number
+  current_year: number
+  n_reference: number
+  n_current: number
+  /** keyed by column: "fico_n" (what the knob moves) and "dti_n" (the control). */
+  features: Record<string, FeatureDrift>
+  /** DEFAULT_ALARM_THRESHOLDS verbatim -- the whole ruleset, not the two lines
+   *  that flatter the demo. Draw the alarm line HERE and nowhere else. */
+  thresholds: Record<string, number>
+  /** evaluate_alarms()'s own strings, unedited -- including the dti tripwire,
+   *  which fires at EVERY setting of the knob and is a disclosed artifact of
+   *  MockBureau's synthetic dti_n, not drift. It is not filtered out; dropping
+   *  the one alarm that embarrasses the demo is the dishonest edit available
+   *  here. */
+  alarms: string[]
+  /** drift_metrics()'s flat dict as logged, the thing `features` was re-keyed
+   *  FROM -- shipped so the re-keying is checkable rather than trusted. */
+  metrics: Record<string, number>
+}
+
+// --------------------------------------------------------------------------
 // Errors. 422 and 503 are real, documented states of this API (serving/errors.py),
 // not generic failures, so they get their own types rather than a string.
 // --------------------------------------------------------------------------
@@ -136,7 +189,28 @@ export class NetworkError extends Error {
   }
 }
 
-async function handle(res: Response): Promise<unknown> {
+/**
+ * 404 -- the route is not mounted on this deployment.
+ *
+ * A real, expected state, and the only route that has it today is /drift. It is
+ * gated on DRIFT_DEMO_AVAILABLE (serving/app.py): the drift monitor lives in
+ * pipelines/, which the slim serving image does not copy and whose mlflow and
+ * metaflow dependencies it does not install. So /drift is present in local dev
+ * and simply absent from the container.
+ *
+ * The client must render that as what it is. A 404 says "not here" -- and the
+ * one thing this app must never do in response is draw the chart anyway from
+ * something it made up. An empty state that admits the endpoint is missing is
+ * strictly more useful than a plausible curve that came from nowhere.
+ */
+export class RouteNotAvailableError extends Error {
+  constructor(route: string) {
+    super(`${route} is not available on this deployment.`)
+    this.name = "RouteNotAvailableError"
+  }
+}
+
+async function handle(res: Response, route: string): Promise<unknown> {
   if (res.ok) return res.json()
 
   let body: { detail?: unknown } = {}
@@ -146,6 +220,10 @@ async function handle(res: Response): Promise<unknown> {
     /* a non-JSON error body; fall through to the status-based branches */
   }
 
+  if (res.status === 404) {
+    // The route is not mounted here. See RouteNotAvailableError.
+    throw new RouteNotAvailableError(route)
+  }
   if (res.status === 422) {
     // FastAPI's RequestValidationError handler: detail is an array of issues,
     // each with a `loc` path and a human `msg`. Surfaced field-by-field rather
@@ -190,7 +268,7 @@ export async function scoreApplicant(payload: ScoreRequest): Promise<ScoreRespon
       `Could not reach the API at ${BASE}. Is uvicorn running on that port?`,
     )
   }
-  return (await handle(res)) as ScoreResponse
+  return (await handle(res, "/score")) as ScoreResponse
 }
 
 /** GET /calibrator. The shipped calibrator's knots, domain and decision threshold,
@@ -203,7 +281,47 @@ export async function getCalibrator(): Promise<CalibratorResponse> {
   } catch {
     throw new NetworkError(`Could not reach the API at ${BASE}.`)
   }
-  return (await handle(res)) as CalibratorResponse
+  return (await handle(res, "/calibrator")) as CalibratorResponse
+}
+
+/**
+ * POST /drift. Turn the market's mean FICO to `mean_fico` and ask the real
+ * monitor what it makes of the shift.
+ *
+ * Deterministic: the same mean_fico returns byte-identical numbers, every time,
+ * in every process (fixed applicant ids, hash-seeded MockBureau). That is what
+ * lets a slider produce a CURVE rather than a shimmer -- drag back to 700 and you
+ * land on exactly the numbers you left.
+ *
+ * Expect the FIRST call to cost ~0.40s and every later one ~50ms (measured, on a
+ * cold uvicorn: 0.409 / 0.397 across two restarts, then 0.053). The handler
+ * imports the monitor lazily (serving/app.py), because importing it at module
+ * scope would drag mlflow and metaflow into the serving image and kill the
+ * container at boot. The cost is real and paid once; callers should warm it.
+ *
+ * NOT the ~1.3s that `import scripts.demo_drift` costs a bare interpreter. Most of
+ * that 1.3s is pandas/scipy/sklearn, and uvicorn has already imported all of them
+ * at startup for /score -- so what the first /drift request actually pays is only
+ * mlflow and metaflow's marginal cost on top of a warm graph. The bare-interpreter
+ * figure overstates the user-visible cost by about 3x, and it is the wrong number
+ * to design the loading state around.
+ *
+ * A 404 here is not a bug -- see RouteNotAvailableError.
+ */
+export async function getDrift(mean_fico: number): Promise<DriftResponse> {
+  let res: Response
+  try {
+    res = await fetch(`${BASE}/drift`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // A NUMBER, not a string: DriftRequest.mean_fico is Field(strict=True), so
+      // "650" is a 422 for the same reason ScoreRequest's floats reject it.
+      body: JSON.stringify({ mean_fico }),
+    })
+  } catch {
+    throw new NetworkError(`Could not reach the API at ${BASE}.`)
+  }
+  return (await handle(res, "/drift")) as DriftResponse
 }
 
 export const API_BASE = BASE

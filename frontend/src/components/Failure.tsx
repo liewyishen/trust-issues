@@ -2,6 +2,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AdditivityError,
   NetworkError,
+  RouteNotAvailableError,
   ServiceUnavailableError,
   ValidationError,
 } from "@/lib/api"
@@ -60,6 +61,21 @@ export function Failure({ error }: { error: unknown }) {
           {error.detail} The contributions did not reconstruct the model's own score, so the
           service refused to return a decision at all. A decision without a valid explanation is
           worse than no decision.
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (error instanceof RouteNotAvailableError) {
+    // The drift monitor renders its own, fuller version of this state (it knows
+    // WHY /drift is dev-only). This is the generic fallback, so that a 404 from
+    // any route reads as "not mounted here" rather than as a mystery.
+    return (
+      <Alert variant="unavailable">
+        <AlertTitle>404 — that route is not mounted on this deployment</AlertTitle>
+        <AlertDescription>
+          {error.message} Not every route this client knows about is present in every deployment;
+          the API said so plainly, and nothing has been drawn in its place.
         </AlertDescription>
       </Alert>
     )

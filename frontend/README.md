@@ -89,6 +89,70 @@ Two traps the comparison is careful about, because both would otherwise mislead:
   Without that tag a reader would see `fico_n  Δ −0.11` and conclude the bureau returned a
   different score. It did not.
 
+## Monitor drift
+
+The **Monitor drift** tab asks a different question from the two beside it. Those score an
+*applicant*. This one watches a *population* move, and asks whether the monitor noticed.
+
+Drag **market FICO mean** from 700 down to 650. `fico_n`'s PSI climbs `0.0092 → 0.9873`, crosses
+its alarm line, and the panel goes red. Beside it, `dti_n` does not move at all — its Δ against
+the baseline stays `0.0000` at every setting of the knob.
+
+**That flat line is the whole argument.** `MockBureau` seeds `dti_n` from a hash of the applicant
+id and *never* from the knob, and both populations draw the same ids, so every `dti_n` is
+byte-identical between them. A monitor that lit up on `dti_n` too would not be detecting drift —
+it would be detecting that *something changed*. The contrast is what makes the alarm mean
+something, which is why the two features are side by side and never stacked.
+
+`POST /drift` computes all of it. The browser computes no PSI and could not do so honestly: PSI
+is defined against the reference population's quantile bin edges, and those live inside
+`pipelines/drift_check.py`. The alarm lines are drawn at the thresholds the endpoint **returned**
+(`DEFAULT_ALARM_THRESHOLDS`) — the same discipline that makes the calibrator chart draw its
+reject line at the threshold `/calibrator` returns rather than at a guessed `0.25`.
+
+**KS fires before PSI does, and the UI has to say so.** The monitor alarms on *either* signal, and
+the two do not cross together — KS is the more sensitive of the pair. Measured across this very
+slider: KS crosses its `0.10` line at about `mean_fico = 691`, and PSI does not cross its `0.25`
+until about `677`. So there is a real band, roughly **677–691**, where the feature is `alarmed`
+with its **PSI bar still visibly under the threshold**:
+
+| mean_fico | PSI | KS | verdict |
+|---|---|---|---|
+| 700 | 0.0092 | 0.0240 | quiet |
+| **690** | **0.0599** — under 0.25 | **0.1045** — over 0.10 | **ALARM** |
+| 650 | 0.9873 | 0.3950 | ALARM |
+
+A panel that showed PSI and the alarm badge alone would put a red **ALARM** above a bar that had
+crossed nothing, and an honest reader would conclude the UI was broken. It isn't — the alarm is
+real, and the signal that raised it is the other one. So **both** bars are drawn, each against its
+own returned threshold, and the panel names which one fired.
+
+**The dti tripwire alarm is left in.** It fires at *every* setting of the knob, because
+`MockBureau`'s `dti_n` is a uniform draw over `[0, 1000)` and `drift_check`'s tripwire probes for
+the real 2016+ DTI reporting regime — values in `(100, 1000]` — so ~90% of the mock's DTI lands in
+that band by construction. It is a mock artifact, not drift, and it reads identically at 700 and
+at 650. It is shown, labelled, and explained rather than filtered out; dropping the one alarm that
+embarrasses the demo would be the single dishonest edit available on this page.
+
+### `/drift` is dev-only, and a 404 says so
+
+The route is absent from the production image, deliberately. The monitor lives in `pipelines/`,
+which imports mlflow and metaflow; the serving image copies neither `pipelines/` nor `scripts/`
+and installs neither dependency, and that exclusion is what keeps it at ~937MB instead of ~2.6GB.
+So `serving/app.py` mounts the route only where the machinery exists (`DRIFT_DEMO_AVAILABLE`) and
+answers **404** where it does not.
+
+The tab renders that as what it is: *"the drift monitor is not available on this deployment"*, with
+the reason. **Nothing is drawn in its place.** A chart there would have to be invented, and an
+invented monitor is worse than an absent one — on a page whose entire argument is that
+computed-in-the-browser numbers cannot be trusted.
+
+The first call costs about **0.4s** and every later one about **50ms**: the endpoint imports the
+drift pipeline lazily, because importing it at module scope would pull mlflow and metaflow into
+`serving.app`'s import graph and kill the container at boot. The tab fires one call at the
+reference mean on mount — which pays that cost before you reach for the slider, and fetches the
+baseline it needs anyway.
+
 ## The enum lists are generated, not typed
 
 `src/lib/enums.generated.ts` is written by `scripts/generate-enums.py`, which **reads** the

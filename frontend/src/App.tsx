@@ -4,6 +4,7 @@ import * as React from "react"
 import { ApplicationForm, NoFicoNote } from "@/components/ApplicationForm"
 import { CompareView } from "@/components/CompareView"
 import { DecisionResult } from "@/components/DecisionResult"
+import { DriftMonitor } from "@/components/DriftMonitor"
 import { Failure } from "@/components/Failure"
 import { Button } from "@/components/ui/button"
 import {
@@ -18,7 +19,19 @@ import { LOAN_MAX, LOAN_MIN, REVENUE_MIN } from "@/lib/enums.generated"
 import { INITIAL, isValid, toRequest, validate, type FormState } from "@/lib/form"
 import { cn } from "@/lib/utils"
 
-type Mode = "single" | "compare"
+/**
+ * Three questions, and they are genuinely different questions -- which is why they
+ * are three modes and not three panels on one page.
+ *
+ *   single  / compare -- about an APPLICANT. What was decided, and why.
+ *   drift             -- about a POPULATION. Has the market moved under the model,
+ *                        and did the monitor notice?
+ *
+ * The drift tab shares no state with the other two, and needs none: it does not
+ * score anybody. It talks to a different endpoint, about a different subject, on a
+ * different time scale.
+ */
+type Mode = "single" | "compare" | "drift"
 
 type State =
   | { status: "idle" }
@@ -51,7 +64,7 @@ export default function App() {
     <div
       className={cn(
         "mx-auto min-h-full px-6 py-10 transition-[max-width]",
-        mode === "compare" ? "max-w-6xl" : "max-w-3xl",
+        mode === "single" ? "max-w-3xl" : mode === "drift" ? "max-w-5xl" : "max-w-6xl",
       )}
     >
       <header className="mb-6">
@@ -60,9 +73,10 @@ export default function App() {
           <span className="tnum text-[11px] text-faint">{API_BASE}</span>
         </div>
         <p className="mt-1 max-w-xl text-[13px] leading-relaxed text-muted">
-          A credit-default risk model whose decisions can be checked. The forms below score
-          against the live model — the credit score is pulled by the system, and every number on
-          the result is returned by the API, not computed here.
+          A credit-default risk model whose decisions can be checked — and whose monitoring can
+          be watched working. Everything on these pages is returned by the live API: the model,
+          the calibrator, the decision threshold and the drift monitor are all the real ones, and
+          none of their numbers are computed in this browser.
         </p>
       </header>
 
@@ -73,14 +87,17 @@ export default function App() {
         <Tab active={mode === "compare"} onClick={() => setMode("compare")}>
           Compare two
         </Tab>
+        <Tab active={mode === "drift"} onClick={() => setMode("drift")}>
+          Monitor drift
+        </Tab>
       </nav>
 
       <main>
-        {mode === "single" ? (
-          <SingleView cal={cal} calError={calError} />
-        ) : (
-          <CompareView cal={cal} calError={calError} />
-        )}
+        {mode === "single" && <SingleView cal={cal} calError={calError} />}
+        {mode === "compare" && <CompareView cal={cal} calError={calError} />}
+        {/* Mounted only while its tab is open, so the ~1.3s warm-up call is paid
+            by the person who asked for it rather than by everyone on page load. */}
+        {mode === "drift" && <DriftMonitor />}
       </main>
 
       <footer className="mt-10 border-t border-border pt-4 text-[11px] leading-relaxed text-faint">

@@ -74,7 +74,12 @@ Depth: [`data-decisions.md`](data-decisions.md) (data quality, fairness);
 
 ## 4. Not yet wired
 
-- **`serving/` is not deployed.** `serving/app.py` answers HTTP requests in-process and under Docker, but nothing runs it as a live service — no host, no orchestration.
+- **`serving/` is not deployed.** `serving/app.py` answers HTTP requests in-process, under Docker,
+  and to `frontend/` on `localhost`, but nothing runs it as a live service — no host, no
+  orchestration. A frontend now consumes it (§7), which changes who calls the API and changes
+  nothing about where it runs. Deployment is the one step of Phase 2 still outstanding, and the
+  `CORS_ALLOW_ORIGINS` allowlist (`serving/app.py`) is written for Vite's dev origins — it is a
+  thing to revisit at deploy time, not a thing that already works in production.
 - **Phase 2 did decouple `serving/` from MLflow, though.** `src/train.py` split into
   `src/train.py` (MLflow orchestration; `train_and_save()` only) and `src/model_io.py` (the
   encoding helpers, the LightGBM training loop, and `load_model_artifact()` — everything
@@ -109,7 +114,15 @@ Constraints a serving design must answer, not defects to apologize for.
 - **The selected threshold is in no artifact.** `best_threshold = 0.25000000000000006`
   lives only in MLflow run history; neither pickle carries a threshold. A service must
   take it as config or read it from MLflow. It is not `0.25` — at `p_cal` exactly 0.25
-  the two disagree.
+  the two disagree. `serving/config.py` takes it as config (`SELECTED_THRESHOLD`), and
+  the gap is unchanged: the artifact still does not carry it.
+- **Clients are handed that threshold; they never assume it.** `GET /calibrator` returns
+  `bundle.threshold` alongside the calibrator's knots for one reason — a client drawing
+  the reject boundary must draw it where the service actually puts it. A client that
+  hardcoded `0.25` would draw a line the service does not decide at, and the difference
+  is real, not pedantic. The same rule holds for every constant the UI renders: the
+  fairness `eo_threshold` and the drift `DEFAULT_ALARM_THRESHOLDS` are shipped on the
+  wire rather than retyped in the browser (§7).
 - **`LOAN_SCHEMA` cannot validate a live request.** It requires `Default` and
   `addr_state` as non-nullable columns (`src/data_validation.py`'s `LOAN_SCHEMA`); a
   request has neither. The gate is a *training* contract.
@@ -158,6 +171,87 @@ contribution ≤ 0, when the base value alone clears the boundary; `reason_codes
 `[]`. That applicant cannot be issued an adverse-action notice listing principal
 reasons, because there are none, and must route to review regardless of `p_cal`. That
 is a structural property of the model, not an error state.
+
+## 7. The interface: two ways to serve a number, and one way to refuse
+
+`serving/` grew from two routes to five, and a `frontend/` that consumes them. The routes are not
+variations on one idea — they divide cleanly into **two patterns**, and choosing between them is
+the design decision worth recording.
+
+**The `/calibrator` pattern: read the live artifact.** `GET /calibrator` returns
+`IsotonicRegression.X_thresholds_` / `.y_thresholds_` straight off the `ArtifactBundle`
+(`serving/artifacts.py`) that `/score` composes decisions with — the same object, not a second read
+of the same path. It therefore **cannot go stale**: whatever it returns *is* what the service
+decides with. The threshold travels with the curve for the same reason — a client drawing the
+reject boundary must draw it where the service puts it (`SELECTED_THRESHOLD`, `serving/config.py`),
+not at the literal `0.25`, which is a different float.
+
+**The `/drift` pattern: wrap the live computation.** `POST /drift` re-implements no PSI, no KS and
+no alarm rule. It turns `MockBureau`'s `mean_fico` knob, builds the two batches through the *same*
+sampling path the CLI demo uses (`scripts/demo_drift.py`'s `drift_report()`), and hands them to
+`pipelines/drift_check.py`'s real `drift_metrics()` / `evaluate_alarms()`. A second PSI in the
+serving layer would be precisely the drift-between-two-sources this repo exists to prevent. This is
+affordable because the mock bureau *generates* its own population: ~0.4 s on the first request,
+~50 ms warm — a slider works on that.
+
+**Fairness could use neither, and that is the interesting part.** `run_fairness_audit()` has both
+properties the other two lack:
+
+- **It needs the data, and the data may not ship.** `load_raw()` reads the 167 MB assessment CSV —
+  the first line of `.dockerignore`, because the brief forbids redistributing it. This is *not* the
+  same kind of exclusion as `/drift`'s: `pipelines/` is left out of the image for size and
+  dependency reasons and could be copied back in. The dataset cannot. No live route can ever work
+  in the image, and no engineering changes that.
+- **It costs ~40 s.** `audit_layer3_ablation()` retrains two full LightGBM models on 454k rows;
+  `audit_layer1()` bootstraps 2,000 resamples per state across 50 states. No caching makes that a
+  request, and there is no knob to turn anyway — a fairness audit is a population-level fact about
+  a model, not a what-if.
+
+So fairness takes a **third pattern: freeze the output, and bind it to the model.**
+`scripts/audit_fairness.py` runs the real audit offline and writes ~38 KB of *derived aggregate
+ratios* — 50 EO ratios with bootstrap CIs, the threshold sweep, the ablation — to
+`models/fairness_audit.json`. Aggregate ratios are not the dataset; that is what makes shipping
+them legitimate where shipping the CSV is not. The artifact is **committed**, unlike its two `.pkl`
+neighbours, because `models/` and `data/*.csv` are both gitignored: as a build output, the evidence
+behind the repo's loudest fairness claim would exist only on the machine that last ran it.
+
+**The staleness gate.** A frozen artifact is the one thing in this service that *can* disagree with
+the booster. Retrain, and the JSON still reports Mississippi at 0.7448 about a model that no longer
+exists — the same "say ≠ do" this repo audits everywhere else, self-inflicted. The mechanism was
+already in the repo: `load_calibrator()` (`src/calibrate.py`) refuses a calibrator fit against a
+different model instance, binding on `trained_at`. `serving/fairness.py`'s `is_stale()` binds the
+audit the same way, on the same field, against `ArtifactBundle.model_trained_at`. On mismatch,
+`GET /fairness` returns **409 with both timestamps and not one ratio**.
+
+Sending the numbers with a warning attached is not a middle ground. A client handed ratios will
+draw them, and a reader remembers the chart, not the caveat. The only reliable way to stop a stale
+number being rendered as a current one is to never send it. An audit that cannot *name* the model
+it ran against is treated as stale too — absence of a provenance field is not evidence of a match.
+
+**Fail-closed on the numbers; fail-open on the service.** The audit is a *reporting* signal (blue in
+[`architecture.html`](architecture.html), like `@explain`), not a gate. A missing, corrupt or stale
+artifact yields a 404 or 409 on `/fairness` and **never stops `/score`** — the same policy
+`training_flow.py`'s `explain` step already applies, and for the same reason: a broken observability
+signal must not throw away a decision the model is perfectly capable of making. `load_fairness_audit()`
+therefore never raises; it *reports*, and `tests/test_serving.py` is what guarantees the shipped
+artifact is present, parseable and fresh. A runtime crash is not.
+
+**The honest-404 principle, stated once.** Two routes are absent from some deployments — `/drift`
+(mounted behind `DRIFT_DEMO_AVAILABLE`'s `find_spec` probe) and `/fairness` (when no artifact
+ships). Both say so. Neither degrades to a plausible chart drawn from a default, a cached snapshot,
+or a hardcoded curve. **An empty state that admits the endpoint is missing is strictly more useful
+than a believable picture that came from nowhere** — and the frontend renders it that way, verified
+against real services in both states.
+
+**What the frontend is, and what it is not.** `frontend/` is React + TypeScript + Vite + Tailwind
+over the live API: score one applicant, compare two *ceteris paribus*, and three views whose only
+job is to make an existing claim checkable — the calibrator's 52-level step function, the drift
+monitor firing beside an unmoved negative control, and the fairness ablation with an interval on
+both sides. It **computes none of its own numbers**. The 0.80 fairness line is drawn at the
+`eo_threshold` the response returns; the drift alarm line at `DEFAULT_ALARM_THRESHOLDS`; the reject
+boundary at the threshold `/calibrator` hands back. Every one of those could have been typed as a
+literal into the client, and each would have been a second source of truth for a number the service
+already owns. The frontend makes the rigor visible. It does not add any.
 
 > Rendered to A4 at 10pt with the diagram at 45% width: 2 pages (headless Chromium,
 > `/Type /Page` count). At 11pt with the diagram inline it is 3.

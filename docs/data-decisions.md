@@ -1081,3 +1081,178 @@ code, so no window exists in which they describe the old shape.
 `ScoreResponse` "gaining three bureau-provenance fields"; that sentence was
 accurate when written and is left exactly as written, the same append-only
 discipline this file applies everywhere else. This entry supersedes it.
+
+---
+
+## The fairness audit ships as a frozen artifact bound to the model, not as a live route -- and refuses to serve its numbers when the binding breaks
+
+**Date:** 2026-07-13.
+
+**Context:** the frontend needed to show the `addr_state` finding. That finding is
+this repo's loudest fairness claim -- Mississippi's Equal-Opportunity ratio
+recovering from ~0.74 to ~0.99 once the state label is dropped -- and it turned
+out to be **persisted nowhere**. MLflow holds exactly five fairness numbers, which
+is the complete list across every run ever logged:
+
+    auc_with_state · auc_no_state · auc_cost · n_confirmed_proxy_states
+    fairness_audit_threshold
+
+`fairness_scalars()` (`pipelines/training_flow.py`) says so in its own docstring --
+it "drops fair_df and the layer DataFrames". So Layer 1's fifty states, fifty
+bootstrap CIs and fifty verdicts were reduced to one float, `n_confirmed_proxy_states`,
+and on the authoritative run that float is `0.0`. The per-state ratios existed only
+as stdout from `run_fairness_audit()`'s `print()`, hand-copied into two docstrings
+and two docs. The number the README leads with had no machine-readable source.
+
+**Why it could not be a live route, and why that is a different reason from `/drift`'s.**
+`POST /drift` wraps `pipelines/drift_check.py` live, and that works because
+`MockBureau` generates its own population: ~0.4s per request. The fairness audit has
+two properties the drift monitor does not.
+
+1. **It needs the data, and the data may not ship.** `run_fairness_audit()` calls
+   `load_raw()`, which reads the 167 MB assessment CSV. That file is the FIRST line
+   of `.dockerignore`, with the reason written there: the brief is explicit that it
+   must not be redistributed. This is NOT the same class of exclusion as `/drift`'s.
+   `pipelines/` is kept out of the image for size and dependency reasons and could be
+   copied back in tomorrow. The dataset cannot. No live fairness route can ever work
+   in the image, and no amount of engineering changes that.
+2. **It costs ~40s.** Measured on the real 1,347,681-row CSV: 2.7s to load,
+   ~28s for `run_fairness_audit()` (Layer 3 retrains two full LightGBM models on
+   454k rows; Layer 1 bootstraps 2,000 resamples per state across 50 states), plus
+   ~10.5s to put CIs on both sides of the ablation. No caching makes that a request,
+   and there is nothing to parameterize anyway -- a fairness audit is a
+   population-level fact about a model, not a what-if.
+
+Worth recording because it was checked rather than assumed: `import src.fairness`
+pulls in **no** mlflow and **no** metaflow (the Phase 2 `model_io.py` split already
+closed that path). The import graph was not the obstacle. The data and the 40 seconds
+were.
+
+**The decision: freeze the OUTPUT, and commit it.** `scripts/audit_fairness.py` runs
+the real `run_fairness_audit()` offline and writes ~38 KB of **derived aggregate
+ratios** -- 50 EO ratios with bootstrap CIs, the threshold sweep, the ablation -- to
+`models/fairness_audit.json`. Aggregate ratios are not the dataset, which is exactly
+what makes shipping them legitimate where shipping the CSV is not.
+
+It is **committed**, and its two `.pkl` neighbours are not. That asymmetry is the
+point: `models/` and `data/*.csv` are BOTH gitignored, so a fresh clone can neither
+serve the model nor regenerate this audit. As a build artifact, the evidence behind
+the repo's loudest fairness claim would exist only on whichever machine last ran it,
+and the README would be asserting it on nobody's authority.
+
+`.gitignore` needed `models/*`, not `models/`. Git does not descend into an excluded
+DIRECTORY, so a `!models/fairness_audit.json` negation inside one silently does
+nothing -- the file stays ignored and the negation looks like it works. Verified with
+`git add --dry-run` / `git ls-files --others --exclude-standard`, not with
+`git check-ignore`, which exits 0 when a NEGATION matches and therefore reads like
+"ignored" when it means the opposite.
+
+**The staleness gate -- the decision this entry exists for.** A frozen artifact is
+the one thing in this service that can disagree with the booster. `GET /calibrator`
+cannot: it reads the live `ArtifactBundle`, so whatever it returns IS what `/score`
+decides with. A JSON file has no such protection. Retrain, and it still cheerfully
+reports Mississippi at 0.7448 about a model that no longer exists -- the exact
+"say != do" this repo audits everywhere else, self-inflicted.
+
+The mechanism was already in the repo and was reused rather than reinvented:
+`load_calibrator()` (`src/calibrate.py`) refuses a calibrator fit against a different
+model instance, binding on `trained_at`. `serving/fairness.py`'s `is_stale()` binds
+the audit the same way, on the same field, against `ArtifactBundle.model_trained_at`.
+On mismatch, `GET /fairness` returns **409 with both timestamps and NOT ONE RATIO**.
+
+Sending the numbers with a warning attached was the other option and was rejected. It
+is not a middle ground: a client that is handed ratios will draw them, and a reader
+remembers the chart, not the caveat. The only reliable way to stop a stale number
+being rendered as a current one is to never send it. An audit that cannot NAME the
+model it ran against is treated as stale too -- absence of a provenance field is not
+evidence of a match.
+
+**Fail-closed on the numbers; fail-open on the service.** The audit is a REPORTING
+signal (blue in `architecture.html`, beside `@explain`), not a gate. A missing,
+corrupt or stale artifact yields a 404 or 409 on `/fairness` and never stops `/score`
+-- the same policy `training_flow.py`'s `explain` step already applies, and for the
+same reason: a broken observability signal must not throw away a decision the model
+is perfectly capable of making. `load_fairness_audit()` therefore never raises; it
+reports. `tests/test_serving.py` is what guarantees the SHIPPED artifact is present,
+parseable and fresh -- a runtime crash is not. Verified: `/score` and `/healthz`
+return 200 with the artifact fresh, stale, and absent.
+
+**Two defects the artifact surfaced, both fixed, neither visible by reading the JSON.**
+
+- `SWEEP_THRESHOLDS` (`src/fairness.py`) is the notebook's `[0.12 ... 0.22, 0.26,
+  0.30]` and does **not** contain the operating threshold. A client asking "what does
+  the shipped model approve at the cutoff it actually uses?" had to read the NEAREST
+  row (0.26) and call it the operating one -- reporting a real, different approval
+  rate as if it were exact. `scripts/audit_fairness.py` now passes the operating
+  point into `audit_layer2` explicitly; `src/fairness.py`'s constant is untouched.
+- `pandas.to_json` defaults to `double_precision=10` and **silently rounds every
+  float to ten decimals**. Harmless for an EO ratio, and fatal for exactly one number
+  here: `SELECTED_THRESHOLD` is `0.25000000000000006` and it was being written as
+  `0.25` -- a genuinely different float (`serving/config.py` spends a comment on the
+  difference). The sweep row was present and the `==` lookup for it still failed.
+  `_records()` no longer goes through `to_json`. The 0.26 row happens to round to the
+  same 82.4%, so the DISPLAYED number would have coincided -- the mechanism was wrong,
+  not (this time) the output, which is precisely the class of defect that ships.
+
+**Disposition:** `src/` scoring logic untouched; no decision changes value. The one
+`src/` change is additive and recorded in the entry below.
+
+**TODO:** none. If the model is retrained, re-run `uv run python
+scripts/audit_fairness.py` -- the freshness test goes red until you do, which is the
+intended behaviour, not a nuisance.
+
+---
+
+## `audit_layer3_ablation()` returns the Test frames for both variants: the ablation gets a confidence interval on each side
+
+**Date:** 2026-07-13.
+
+**Context:** Layer 3 trains a with-state model and a no-state model, scores both on
+Test, reduces each to one EO ratio per state, and dropped the predictions on the
+floor. That left the repo's headline fairness claim as **two bare point estimates**
+-- "MS is 0.745 with the label and 0.988 without" -- which is precisely the credulity
+`audit_layer1()` exists to refuse. Layer 1 bootstraps a CI *because* a point estimate
+below 0.80 on a finite sample is noise rather than evidence. The ablation was making
+exactly the kind of claim the rest of the module refuses to make.
+
+**The change, and its boundaries.** `audit_layer3_ablation()` now returns
+`fair_df_with_state` and `fair_df_no_state` -- Test-level frames in the
+`addr_state` / `y_true` / `p` shape that `audit_layer1()` and `audit_layer2()`
+ALREADY take as input. A caller therefore puts a real bootstrap CI on both sides of
+the ablation by **reusing the real audit**, rather than a second CI implementation
+growing up downstream.
+
+Additive only. No existing computation is touched: both frames are slices of arrays
+the function already had in hand. The printed audit report is **byte-for-byte
+identical** before and after (sha256 `4147b1b0b9b53d9d`, 4,282 bytes, verified against
+the real CSV). Nothing already in-tree pays the extra bootstrap: `run_fairness_audit()`
+still audits only the shipped model, and `fairness_scalars()` reduces the dict to
+scalars and drops the frames. Feeding them back through `audit_layer1()` costs ~10.5s
+(2,000 resamples x 50 states x 2 variants) and is the caller's decision to make, not
+the function's.
+
+**What the intervals show** (threshold 0.22, the ablation's own):
+
+    state   EO with state     95% CI              EO no state    95% CI
+    MS      0.7448            [0.7155, 0.7741]    0.9879         [0.9621, 1.0124]
+
+MS is `confirmed (CI fully < 0.80)` with the state label and `clear` without it, and
+the two intervals **do not overlap**. Exactly one state is confirmed with `addr_state`
+in; **zero** are confirmed with it out. The claim is now an interval claim: the shift
+survives a bootstrap, which two point estimates could never have established.
+
+**The cost of looking: Layer 3's own verdict column is weaker than it sounds.** That
+column is decided on POINT ESTIMATES (`eo_with_state < EO_THRESHOLD`), and it
+disagrees with the intervals. `NV` is labelled "was already clear" on
+`eo_with_state = 0.800147` -- a verdict turning on the fourth decimal -- while its CI
+`[0.7823, 0.8183]` straddles 0.80 and is honestly "inconclusive". `AL` likewise. The
+logic is left exactly as it is (it mirrors notebook Cell 41); this change only makes
+the evidence available to say so, and the frontend says so rather than picking
+whichever reading flatters the demo. Trusting a point estimate is the specific error
+this audit exists to refuse, and the audit was not immune to it.
+
+**Disposition:** `src/fairness.py` only; no scoring logic, no decision, no metric
+value changes. Committed separately (`18daa36`) from everything that consumes it, so
+the `src/` diff can be reviewed in isolation.
+
+**TODO:** none.

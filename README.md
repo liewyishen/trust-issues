@@ -57,8 +57,8 @@ same function — so drawing that edge would be a lie.
 | **3. Point-in-time-safe features** | All features constructed from data available at application date only |
 | **4. Baseline-first modeling** | Logistic-regression baseline before LightGBM; no premature complexity |
 | **5. Calibration + cost-based thresholds** | Isotonic calibration on a disjoint calibration slice; operating threshold chosen by expected profit, not 0.5 |
-| **6. Explainability + fairness** | SHAP reason codes in `src/explain.py` — rank-ordered risk-increasing factors on the model's raw **log-odds** axis, never converted to probability contributions (that quantity is undefined here — see "What this isn't"); a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers 0.74 → 0.99 for an AUC cost of just 0.0036 |
-| **7. Drift monitoring** | A runnable yearly drift check (`pipelines/drift_check.py`): hand-rolled PSI + KS on `dti_n` per issue year against the training-years distribution, a separate 999-sentinel rate, a (100, 1000] tripwire share, and a per-year calibration gap scored with the shipped model. Validated against the dataset's own 2016+ DTI regime shift — the tripwire fires across all of 2016–2018, while the calibration-gap alarm fires on 2016–2017 (2018's gap flips slightly positive, +0.0154, staying under the alarm line); both are quiet on the 2015 baseline. A demonstrated capability on this dataset, not a live production monitoring service |
+| **6. Explainability + fairness** | SHAP reason codes in `src/explain.py` — rank-ordered risk-increasing factors on the model's raw **log-odds** axis, never converted to probability contributions (that quantity is undefined here — see "What this isn't"); a hand-rolled three-layer fairness audit — bootstrap CIs on the Equal-Opportunity ratio, a threshold sweep, and an ablation that retrains without `addr_state`. The audit caught `addr_state` acting as a digital-redlining shortcut, so the production model drops it: Mississippi's EO ratio recovers **0.745 → 0.988 with non-overlapping 95% CIs**, for an AUC cost of 0.0036. Served, not just written down — `GET /fairness`, bound to the model it audited |
+| **7. Drift monitoring** | A runnable yearly drift check (`pipelines/drift_check.py`): hand-rolled PSI + KS on `dti_n` per issue year against the training-years distribution, a separate 999-sentinel rate, a (100, 1000] tripwire share, and a per-year calibration gap scored with the shipped model. Validated against the dataset's own 2016+ DTI regime shift — the tripwire fires across all of 2016–2018, while the calibration-gap alarm fires on 2016–2017 (2018's gap flips slightly positive, +0.0154, staying under the alarm line); both are quiet on the 2015 baseline. The same monitor is drivable live through `POST /drift`, with a **negative control that does not move** (`dti_n`, Δ = 0.0000). A demonstrated capability on this dataset, not a live production monitoring service |
 
 ---
 
@@ -101,6 +101,44 @@ real high-income, high-loan-amount borrowers. Verdict: a genuine subpopulation s
 **2016+ change in how DTI was reported**, not garbage — so the contract was widened deliberately
 (100 → 1000), not silently, and the episode flagged a live distribution shift the training years
 never see. Full write-up in [`docs/data-decisions.md`](docs/data-decisions.md).
+
+---
+
+## Watch it work
+
+The audits above are not screenshots in a write-up — there is a **live React frontend** talking to
+the **real FastAPI service**, and none of its numbers are computed in the browser. Fill in the form,
+and the decision that comes back is the shipped booster's, composed with the shipped calibrator, at
+the threshold the pipeline actually chose. The explanation is checkable on the page: the reason
+codes sum, with the base value, to the model's own raw margin — the service returns a **500 rather
+than a decision** if they don't (`src/explain.py`'s `_assert_additivity`).
+
+The frontend exists to make the existing rigor *visible*. It does not change a single number.
+
+Three of its views are there because each one is hard to fake:
+
+**Calibration — the step function you can see.** `GET /calibrator` returns the shipped isotonic
+calibrator's own knots, and the UI draws them. You can watch the score land on one of **52 distinct
+levels** and see the slope sit at exactly zero across most of the reject region. That picture *is*
+the argument for why this repo refuses to publish "this feature added N points of default
+probability": under a step function, the quantity has no value to compute
+([`docs/explainability.md`](docs/explainability.md) §4–§5). The chart is read off the live artifact,
+so a retrain changes it — a baked-in snapshot would break exactly the claim it makes.
+
+**Monitoring — a knob, and a negative control that refuses to move.** `POST /drift` turns
+`MockBureau`'s `mean_fico` and hands the shifted population to the *real* monitor
+(`pipelines/drift_check.py` — the same PSI/KS/alarm code the batch job runs; the endpoint
+re-implements none of it). Drag the market's mean FICO from 700 down to 650 and `fico_n`'s PSI goes
+**0.0092 → 0.9873** and alarms. The point is what happens beside it: `dti_n` — which the knob does
+not touch — holds **PSI 0.0052 and KS 0.0240 at *both* settings, Δ = 0.0000**. Catching drift is
+easy if you alarm on everything. The control is what proves the monitor fires on *real* drift and
+not on any change at all.
+
+**Fairness — the finding, served as evidence rather than as prose.** `GET /fairness` serves the
+three-layer audit. Layer 1 on the shipped model is a wall of green (50 states, 0 confirmed) and the
+page says so *and* says why that proves almost nothing — at that threshold the model approves 82.4%
+of good applicants, and a permissive cutoff washes state differences out. The finding lives in
+Layer 3's counterfactual, with a bootstrap interval on both sides (see below).
 
 ---
 
@@ -154,26 +192,59 @@ records a 502 error class as the first thing to add once a real bureau is wired 
 decision with an empty `reason_codes` list to human review (`docs/design.md` §6) — both recorded,
 neither implemented.
 
-`serving/` is a FastAPI adapter over the trained model + calibrator: `POST /score` scores
-one applicant into a decision plus rank-ordered reason codes, `GET /healthz` reports
-readiness and the identity of what's loaded. It reuses `src/`'s logic rather than
-re-implementing it — `/score` calls `explain_applicants()` directly, from `serving/app.py`'s
-`/score` handler, the same function `tests/test_explain.py` exercises, so production scoring and
-tested scoring run through one code path, not two.
+`serving/` is a FastAPI adapter over the trained model + calibrator. It reuses `src/`'s logic
+rather than re-implementing it — `/score` calls `explain_applicants()` directly, from
+`serving/app.py`'s `/score` handler, the same function `tests/test_explain.py` exercises, so
+production scoring and tested scoring run through one code path, not two.
+
+Five routes, and **two of them are absent from the production image on purpose**:
+
+| Route | What it does | In the slim image? |
+|---|---|---|
+| `POST /score` | Scores one applicant into a decision plus rank-ordered reason codes, with the credit pull it was decided on | yes |
+| `GET /healthz` | Readiness, and the identity of what's loaded (`model_trained_at`, `calibrator_trained_at`, threshold) | yes |
+| `GET /calibrator` | The shipped isotonic calibrator's own knots and the real decision threshold, read off the bundle `/score` decides with | yes |
+| `POST /drift` | Turns `MockBureau`'s `mean_fico` and returns the **real** monitor's PSI/KS/alarms | **no — dev only** |
+| `GET /fairness` | The frozen three-layer fairness audit, bound to the shipped model | yes, when the artifact ships |
+
+The two exclusions have *different* reasons, and the difference is the whole design:
+
+- **`/drift` is dev-only for dependency and size reasons.** The monitor lives in `pipelines/`, which
+  the slim image does not copy and whose `mlflow` / `metaflow` dependencies it does not install
+  (`uv sync --no-group training`). The route is mounted behind a `find_spec` probe
+  (`serving/app.py`'s `DRIFT_DEMO_AVAILABLE`) and the handler imports the monitor *inside* the
+  function — importing it at module scope would drag `mlflow` + `metaflow` into `serving.app`'s
+  import graph and undo the 2.64GB → 937MB cut. In the container the route is simply not there, and
+  a client gets an **honest 404**. A test asserts the line holds: `import serving.app` pulls in no
+  `mlflow`, no `metaflow`, no `pipelines`, no `src.fairness`.
+- **`/fairness` is a frozen artifact because the data may not ship.** `run_fairness_audit()` needs
+  the 167 MB assessment CSV — the *first line* of `.dockerignore`, because the brief forbids
+  redistributing it — and ~40 s to retrain both ablation variants. That is not a size trade-off we
+  could reverse; it is a constraint on what may be shipped at all. So the audit runs **offline**
+  (`scripts/audit_fairness.py`) and freezes its *output* — derived aggregate ratios, not the dataset.
+
+Both refusals obey one rule: **an honest 404 or 409 beats a fabricated chart.** A route that isn't
+there says so; it does not invent a plausible curve.
 
 **`GET /fairness` serves the audit — and refuses to, when it's about a different model.**
-The three-layer audit can't run inside the service: it needs the 167 MB assessment CSV (the
-first line of `.dockerignore`, because the brief forbids redistributing it) and ~40 s to
-retrain both ablation variants. So `scripts/audit_fairness.py` runs it offline and freezes
-~35 KB of *derived ratios* — 50 Equal-Opportunity ratios with bootstrap CIs, the threshold
-sweep, the ablation — into `models/fairness_audit.json`, which is committed (the two `.pkl`
-files beside it are not; see `.gitignore`). That artifact is the one thing in this service
-that can go stale: retrain, and the JSON still cheerfully reports Mississippi at 0.7448.
-So it's **bound to the model by `trained_at`** — the same binding `load_calibrator()` already
-enforces between the calibrator and the booster — and on mismatch `/fairness` returns **409
-with both timestamps and not one ratio**. Withholding the numbers is the point: a client
-handed stale ratios with a warning attached will draw the ratios. Fail-closed on the numbers,
-fail-**open** on the service — a broken reporting artifact never stops `/score`.
+`scripts/audit_fairness.py` runs the real `run_fairness_audit()` offline and freezes **~38 KB of
+derived ratios** — 50 Equal-Opportunity ratios with bootstrap CIs, the threshold sweep, the
+ablation — into `models/fairness_audit.json`, which is **committed** (the two `.pkl` files beside
+it are not; see `.gitignore`). It has to be: `models/` and `data/*.csv` are *both* gitignored, so a
+fresh clone can neither serve the model nor regenerate the audit. As a build artifact, the evidence
+behind this repo's loudest fairness claim would exist only on whichever machine last ran it.
+
+That artifact is the one thing in this service that **can go stale**: retrain, and the JSON would
+still cheerfully report Mississippi at 0.7448, about a booster that no longer exists. `/calibrator`
+has no such problem — it reads the live bundle, so whatever it returns *is* what `/score` decides
+with. So the audit is **bound to the model by `trained_at`** — the same binding `load_calibrator()`
+already enforces between the calibrator and the booster — and on mismatch `/fairness` returns **409
+with both timestamps and not one ratio**.
+
+Withholding the numbers is the point, not an inconvenience: a client handed stale ratios with a
+warning attached will draw the ratios, and a reader remembers the chart, not the caveat.
+**Fail-closed on the numbers, fail-open on the service** — a broken *reporting* artifact never
+stops `/score` (the audit is blue in the diagram: it reports, it gates nothing).
 
 As of Phase 1, `fico_n` is no longer self-reported by the applicant. `POST /score` takes an
 `applicant_id` instead, and the service fetches `fico_n` from a `CreditBureau` — a
@@ -204,9 +275,13 @@ labelled "credit report" carries the credit data the model consumed, and nothing
 not.
 
 Honestly: `MockBureau` is, by its own docstring, "a `CreditBureau` that never calls a real
-vendor" — no real bureau is integrated. `serving/` answers
-requests in-process and under Docker but is not deployed anywhere: no host, no
-orchestration ([`docs/design.md`](docs/design.md) §4). A failed bureau pull is a known,
+vendor" — no real bureau is integrated. And **`serving/` still is not deployed**: it answers
+requests in-process, under Docker, and to the frontend on `localhost`, but nothing runs it as a
+live service — no host, no orchestration ([`docs/design.md`](docs/design.md) §4). The frontend is a
+real client of a real API; both of them run on your machine. CORS reflects that honestly, too —
+`CORS_ALLOW_ORIGINS` enumerates the two Vite dev origins and is deliberately **not** `"*"`, because
+a wildcard costs nothing today and becomes a real hole the moment a credential is added, and nobody
+re-reads a middleware argument that has always been there. A failed bureau pull is a known,
 deliberately deferred gap — `CreditBureau.fetch()`'s contract permits raising, but `/score`
 doesn't yet catch it, because `MockBureau` performs no I/O and cannot fail
 (`serving/errors.py`'s module docstring, its "500" section; full record in
@@ -253,7 +328,9 @@ project exists to catch, so it is written the long way instead.
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run. Training-only as of Phase 2 — `serving/`'s import graph does not reach it (see "Serving layer" above) |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
-| **pytest** | 290 tests across the modeling layer |
+| **FastAPI + Pydantic** | The HTTP boundary (`serving/`). Pydantic is the *request contract*, not decoration: closed enums, strict floats (`"700"` is a 422, not a coerced 700), and `extra="forbid"` — a client that submits its own `fico_n` is rejected, because a client that could set its own FICO could describe an applicant whose score never came from a bureau pull |
+| **React + TypeScript + Vite + Tailwind** | The frontend (`frontend/`). Talks to the live API and computes none of its own numbers — the model, the calibrator, the threshold, the drift monitor and the fairness audit are all read off the service. No charting library: the calibrator step function, the drift bars and the bootstrap intervals are hand-drawn SVG/CSS, so nothing is smoothed or interpolated into a curve the data doesn't have |
+| **pytest** | 290 tests across the modeling and serving layers (94 of them in `tests/test_serving.py`) |
 
 ---
 
@@ -264,9 +341,27 @@ uv sync                                              # install dependencies
 uv run pytest                                        # run the test suite (290 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
+uv run python scripts/audit_fairness.py              # re-run the fairness audit -> models/fairness_audit.json
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
 uv run jupyter lab                                   # open the analysis notebook
 ```
+
+### Run the UI against the real API
+
+Two terminals. The frontend is a client of the service, not a mock of it.
+
+```bash
+# terminal 1 — the API
+uv run uvicorn serving.app:app --reload              # http://localhost:8000
+
+# terminal 2 — the UI
+cd frontend && npm install && npm run dev            # http://localhost:5173
+```
+
+`/score`, `/calibrator` and `/fairness` need `models/` populated — run the training pipeline first,
+or the service refuses to start (it fails at boot rather than 500ing on the first applicant).
+`/drift` needs the training dependency group, so it is present here and absent from the slim image.
+Detail, including what each view claims and what it declines to: [`frontend/README.md`](frontend/README.md).
 
 ---
 
@@ -287,15 +382,21 @@ attribution required if you reproduce results.
 ```
 data/          Download instructions + gitignored real files
 docs/          Detailed write-ups for each stage
+frontend/      React + TS + Vite UI on the live API: score one, compare two, and the
+               three moats (calibrator explainer, drift monitor, fairness audit)
 notebooks/     Exploratory analysis notebook (+ HTML export)
 pipelines/     Metaflow end-to-end training pipeline + the yearly dti_n drift check
+scripts/       Offline entry points: demo_drift.py (drives the monitor's knob),
+               audit_fairness.py (freezes the fairness audit as a served artifact)
 src/           Modeling layer: data loading, validation, features, leakage checks,
                model I/O + training (mlflow-free encoding/training helpers in
                model_io.py, MLflow orchestration in train.py), calibration,
                evaluation, fairness, explanation
-serving/       FastAPI HTTP scoring adapter (/score, /healthz) + the credit-bureau
-               protocol/mock (bureau.py) -- not deployed (see docs/design.md §4)
-models/        Trained model + calibrator artifacts (gitignored)
+serving/       FastAPI adapter: /score, /healthz, /calibrator, /fairness, and the
+               dev-only /drift + the credit-bureau protocol/mock (bureau.py).
+               Runs locally and under Docker; not deployed (see docs/design.md §4)
+models/        Trained model + calibrator artifacts (gitignored) -- plus the ONE
+               committed file beside them, fairness_audit.json (see .gitignore)
 figures/       Generated plots (gitignored)
 tests/         pytest suite (290 passing)
 ```

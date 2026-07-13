@@ -1,6 +1,7 @@
 import { Check, ChevronRight } from "lucide-react"
 import * as React from "react"
 
+import { CalibratorExplainer } from "@/components/CalibratorExplainer"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -8,28 +9,73 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import type { ScoreResponse } from "@/lib/api"
+import type { CalibratorResponse, ScoreResponse } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 /*
- * Three tiers, in the order a reader needs them.
+ * Four tiers, in the order a reader needs them.
  *
  *   1  the pull the system made      -- what the decision was made ON
  *   2  the decision                  -- what was decided, and the named reasons
- *   3  the additive explanation      -- collapsed; proof the two above cohere
+ *   3  the calibrator                -- WHY that probability and not a nearby one
+ *   4  the additive explanation      -- collapsed; proof the tiers above cohere
+ *
+ * Tier 3 sits where it does deliberately. Tier 2 shows a probability; tier 4
+ * shows contributions in log-odds and declines to convert them into probability
+ * points. A reader who reads those in sequence is owed the reason in between, and
+ * the reason is a picture: the calibrator is a 52-level step function, its slope
+ * is zero almost everywhere, and there is therefore nothing to convert.
  *
  * Every number rendered here comes off the API response. Nothing is computed in
- * the browser except the additivity SUM in tier 3 -- and that one exists
- * precisely so a reader can check the backend's arithmetic rather than trust it.
+ * the browser except (a) the additivity SUM in tier 4 and (b) the exploratory
+ * probe in tier 3 -- and both exist precisely so a reader can check the backend
+ * rather than trust it. The applicant's own figures are never recomputed.
  */
 
-export function DecisionResult({ r }: { r: ScoreResponse }) {
+export function DecisionResult({
+  r,
+  cal,
+  calError,
+}: {
+  r: ScoreResponse
+  cal: CalibratorResponse | null
+  calError: unknown
+}) {
   return (
     <div className="space-y-4">
       <CreditReportTier report={r.credit_report} />
-      <DecisionTier r={r} />
+      <DecisionTier r={r} cal={cal} />
+      {cal ? (
+        <CalibratorExplainer r={r} cal={cal} />
+      ) : calError ? (
+        <CalibratorUnavailable error={calError} />
+      ) : null}
       <TechnicalTier r={r} />
     </div>
+  )
+}
+
+/**
+ * The decision above stands -- /score returned it. Only the PICTURE of the
+ * calibrator is missing, and saying so beats quietly dropping the panel, which
+ * would leave a reader believing they had seen the whole page.
+ */
+function CalibratorUnavailable({ error }: { error: unknown }) {
+  return (
+    <Card>
+      <CardContent className="py-4">
+        <div className="text-xs font-medium text-fg">
+          The calibrator could not be fetched.
+        </div>
+        <p className="mt-1.5 text-[11px] leading-relaxed text-muted">
+          <code className="text-faint">GET /calibrator</code> failed, so the step function
+          behind the probability above is not drawn. The decision itself is unaffected —{" "}
+          <code className="text-faint">/score</code> returned it, and it was composed with the
+          calibrator whether or not this panel can show you its shape.{" "}
+          <span className="text-faint">{String(error)}</span>
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -89,7 +135,7 @@ function Provenance({ label, value }: { label: string; value: string }) {
 // ===========================================================================
 // TIER 2 -- the decision, and the principal adverse factors behind it.
 // ===========================================================================
-function DecisionTier({ r }: { r: ScoreResponse }) {
+function DecisionTier({ r, cal }: { r: ScoreResponse; cal: CalibratorResponse | null }) {
   const approved = r.decision === "APPROVE"
 
   return (
@@ -129,14 +175,26 @@ function DecisionTier({ r }: { r: ScoreResponse }) {
         </div>
 
         {/* The honesty line. The probability above is not a point on a smooth
-            curve; it is one of 52 levels. Saying so where the number is shown is
-            the difference between a calibrated model and a model that merely
-            outputs a decimal. */}
+            curve; it is one of a few dozen levels. Saying so where the number is
+            shown is the difference between a calibrated model and a model that
+            merely outputs a decimal.
+
+            The LEVEL COUNT is read from the live calibrator, never written into
+            this sentence. A hardcoded "52" would keep rendering after a retrain
+            that changed it, and a sentence that keeps its wording while the
+            artifact moves underneath it is exactly the failure this repo exists
+            to prevent. With /calibrator unreachable the claim is still true, so
+            it is still made -- just without a number nobody can vouch for. */}
         <p className="rounded-md border border-border bg-surface-2/50 px-3 py-2 text-[11px] leading-relaxed text-muted">
-          This probability comes from a <span className="text-fg">52-level isotonic
-          calibrator</span> — it is discrete, not continuous. Only 52 distinct values are
-          reachable across the whole score range, so nearby applicants routinely land on
-          the identical probability.
+          This probability comes from an{" "}
+          <span className="text-fg">
+            {cal ? `${cal.n_distinct_y}-level ` : ""}isotonic calibrator
+          </span>{" "}
+          — it is discrete, not continuous.{" "}
+          {cal
+            ? `Only ${cal.n_distinct_y} distinct values are reachable across the whole score range, so nearby applicants routinely land on the identical probability.`
+            : "Only a fixed set of values is reachable across the whole score range, so nearby applicants routinely land on the identical probability."}{" "}
+          {cal && <span className="text-faint">The step function is drawn below.</span>}
         </p>
 
         <ReasonCodes codes={r.reason_codes} />

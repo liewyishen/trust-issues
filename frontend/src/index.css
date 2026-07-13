@@ -56,3 +56,45 @@ body {
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono);
 }
+
+/*
+ * The p_raw probe. Its step is 1e-6 -- a million positions across ~600px, so one
+ * pixel of travel is ~1600 steps. The calibrator's ramps are 9e-09 to 1.5e-03
+ * wide, i.e. every one of them is narrower than a pixel. Dragging therefore
+ * CANNOT land on a ramp in practice, which is not a defect of the control: it is
+ * the artifact's discreteness, felt. The jump buttons beside it exist so a ramp
+ * can be inspected deliberately, since it cannot be reached by accident.
+ */
+.cal-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  outline: none;
+}
+.cal-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--color-fg);
+  border: 2px solid var(--color-bg);
+  cursor: grab;
+}
+.cal-slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+}
+.cal-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--color-fg);
+  border: 2px solid var(--color-bg);
+  cursor: grab;
+}
+.cal-slider:focus-visible {
+  border-color: var(--color-border-strong);
+}

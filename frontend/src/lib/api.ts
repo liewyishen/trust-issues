@@ -75,8 +75,10 @@ export interface ScoreResponse {
 }
 
 /** serving/schema.py's CalibratorResponse -- the shipped calibrator's own shape,
- *  read off the same bundle /score decides with. Defined now; the step-function
- *  explainer that consumes it is the next step. */
+ *  read off the same bundle /score decides with. Consumed by CalibratorExplainer,
+ *  which draws it. Nothing in this client holds a copy of these knots: the plot
+ *  is a rendering of whatever the service is serving today, so a retrain changes
+ *  the picture. A baked-in snapshot would break exactly the claim the plot makes. */
 export interface CalibratorResponse {
   x_thresholds: number[]
   y_thresholds: number[]
@@ -191,7 +193,9 @@ export async function scoreApplicant(payload: ScoreRequest): Promise<ScoreRespon
   return (await handle(res)) as ScoreResponse
 }
 
-/** GET /calibrator. Defined now; consumed by the step-function explainer next. */
+/** GET /calibrator. The shipped calibrator's knots, domain and decision threshold,
+ *  read off the bundle /score decides with. Fetched once per page load -- it is an
+ *  artifact, not a per-applicant computation. */
 export async function getCalibrator(): Promise<CalibratorResponse> {
   let res: Response
   try {

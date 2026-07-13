@@ -9,7 +9,9 @@ import {
   NetworkError,
   ServiceUnavailableError,
   ValidationError,
+  getCalibrator,
   scoreApplicant,
+  type CalibratorResponse,
   type ScoreRequest,
   type ScoreResponse,
 } from "@/lib/api"
@@ -22,6 +24,21 @@ type State =
 
 export default function App() {
   const [state, setState] = React.useState<State>({ status: "idle" })
+
+  // The calibrator is the same object for every applicant -- it is the SHIPPED
+  // artifact, not a per-request computation -- so it is fetched once, on mount,
+  // and reused. It is deliberately NOT bundled into ScoreResponse: /score answers
+  // "what was decided about this applicant", /calibrator answers "what is the
+  // function that decided". Fetching it separately keeps that boundary visible.
+  //
+  // Its failure is kept separate from the scoring failure. A dead /calibrator
+  // must not take down a decision that /score already returned successfully.
+  const [cal, setCal] = React.useState<CalibratorResponse | null>(null)
+  const [calError, setCalError] = React.useState<unknown>(null)
+
+  React.useEffect(() => {
+    getCalibrator().then(setCal, setCalError)
+  }, [])
 
   const submit = async (payload: ScoreRequest) => {
     setState({ status: "pending" })
@@ -50,7 +67,9 @@ export default function App() {
         <ApplicationForm onSubmit={submit} pending={state.status === "pending"} />
 
         {state.status === "failed" && <Failure error={state.error} />}
-        {state.status === "scored" && <DecisionResult r={state.response} />}
+        {state.status === "scored" && (
+          <DecisionResult r={state.response} cal={cal} calError={calError} />
+        )}
       </main>
 
       <footer className="mt-10 border-t border-border pt-4 text-[11px] leading-relaxed text-faint">

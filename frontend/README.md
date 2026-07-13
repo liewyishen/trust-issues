@@ -3,10 +3,11 @@
 A browser client for the `trust-issues` scoring API. It submits a loan application to the
 real FastAPI service, the real model scores it, and the page renders the real decision.
 
-**Nothing on the result page is computed in the browser** — every number comes off the API
-response — with exactly one exception, and that exception is the point: tier 3 re-adds the
-SHAP contributions itself, so a reader can *check* the backend's additivity claim instead of
-trusting it.
+**No number describing the applicant is computed in the browser** — every one comes off the API
+response. There are exactly two things the page works out for itself, and both exist to be
+*checked* rather than trusted: tier 4 re-adds the SHAP contributions to see whether they
+reconstruct the score, and tier 3 re-reads the served calibrator curve to see whether it
+reproduces the probability the API returned. Neither can change a decision; both can catch one.
 
 ## Run both sides
 
@@ -103,9 +104,51 @@ and each renders as itself:
 - **500** — the additivity guard failed: the explanation did not reconstruct the score, so
   the service returned no decision at all.
 
-## Not built here (yet)
+## The calibrator, drawn
 
-The **calibrator step-function explainer** — an interactive rendering of the shipped 52-level
-isotonic calibrator, drawn from `GET /calibrator`'s real thresholds and its real decision
-threshold — is the next step. `getCalibrator()` in `src/lib/api.ts` is already typed and
-wired to that endpoint; nothing consumes it yet.
+`CalibratorExplainer` sits between the decision and the additive explanation, and it is there
+to answer the question those two raise between them: tier 2 shows a probability, tier 4 shows
+contributions in log-odds and refuses to convert them into probability points. Why?
+
+Because of the shape. The shipped calibrator is a **step function** — flat blocks joined by
+ramps — so `dp_cal/dp_raw` is **exactly zero almost everywhere**. "This feature is worth N
+points of probability" is not a number nobody has bothered to compute; there is no number.
+`docs/explainability.md` measures the flat fraction of the reject region at **99.31%** of the
+`p_raw` axis (a statement about the *axis*, not about how many applicants sit on it — the
+distinction is the doc's, and the UI keeps it).
+
+Drag the probe and you feel it: `p_calibrated` holds flat, holds flat, holds flat, then jumps.
+
+**Every knot, the domain and the decision threshold come from `GET /calibrator`.** Nothing is
+hardcoded, and that is load-bearing rather than tidy. The repo's claim is *the calibrator you
+explain is the calibrator you ship* — a snapshot baked into this client would keep drawing a
+confident picture of an artifact that had since been retrained, which is precisely the failure
+the claim exists to rule out. Retrain the calibrator and the plot changes, or it is lying.
+
+Three things the rendering will not do:
+
+- **It does not smooth.** All 104 knots are emitted in order and joined by straight segments,
+  because that is what a piecewise-linear function *is*. The ramps come out under a pixel wide
+  (`9.1e-09` to `1.5e-03`) because they *are* that narrow. A curve-fitted rendering would be a
+  lie about the artifact, and the artifact's discreteness is the whole finding.
+- **It does not hide the clipping.** `out_of_bounds="clip"` means every `p_raw` above `x_max`
+  returns one identical value — **40.3% of the `[0, 1]` axis collapsing to a single output**.
+  That is drawn, shaded and labelled, not trimmed away as an edge case.
+- **It does not recompute the applicant.** Their point is the API's own `p_raw` and
+  `p_calibrated`, plotted. Only the *exploratory probe* is evaluated client-side, and it is
+  labelled as a reading of the server's curve rather than as a score.
+
+That client-side reading is exact — it transcribes
+`IsotonicRegression(out_of_bounds="clip").predict`, and was checked against the real shipped
+calibrator over 40,212 probes (every knot, every block and ramp midpoint, uniform draws across
+the whole axis): max error `5.55e-17`. You do not have to take that sentence's word for it. The
+panel re-runs the check live at the applicant's own `p_raw`, compares it to the
+`p_calibrated` the API returned, and says on screen whether it reproduced it — the same move
+tier 4 makes with the additivity sum.
+
+**The ramps cannot be dragged onto.** The slider steps at `1e-6` across ~600px, so one pixel of
+travel is ~1600 steps, and every ramp is narrower than a pixel. That is not a defect of the
+control — it is the artifact, felt. The `‹ ›` buttons jump to a ramp deliberately, since it
+cannot be reached by accident. One of the 51 is the entire decision boundary: `p_cal` goes
+`24.15% → 26.48%` across **4.0 parts per million** of `p_raw`, at a slope of `5829.5`. Below
+that sliver, approve. Above it, reject. The panel flags that ramp when you land on it.

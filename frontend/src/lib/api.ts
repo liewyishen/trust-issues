@@ -106,9 +106,11 @@ export interface FeatureDrift {
   /** evaluate_alarms()'s verdict on THIS column's psi and ks -- not a re-test of
    *  psi against a threshold. The monitor alarms on EITHER signal crossing, and
    *  the two do not cross together: ks is the more sensitive of the pair and
-   *  fires first (measured: ks crosses at mean_fico ~691, psi at ~677). So a
-   *  feature can be `alarmed` with its PSI still under the line, and the UI must
-   *  not present `alarmed` as if it meant "PSI crossed". */
+   *  fires first. Swept in 1-point steps: at mean_fico 691 ks is 0.0980 and the
+   *  feature is QUIET; at 690 ks is 0.1045 and it ALARMS -- while psi does not
+   *  cross 0.25 until 676 (0.2520; at 677 it is still 0.2352). So across the
+   *  whole band 677..690 a feature is `alarmed` with its PSI under the line, and
+   *  the UI must not present `alarmed` as if it meant "PSI crossed". */
   alarmed: boolean
 }
 

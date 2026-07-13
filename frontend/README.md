@@ -111,10 +111,11 @@ is defined against the reference population's quantile bin edges, and those live
 reject line at the threshold `/calibrator` returns rather than at a guessed `0.25`.
 
 **KS fires before PSI does, and the UI has to say so.** The monitor alarms on *either* signal, and
-the two do not cross together — KS is the more sensitive of the pair. Measured across this very
-slider: KS crosses its `0.10` line at about `mean_fico = 691`, and PSI does not cross its `0.25`
-until about `677`. So there is a real band, roughly **677–691**, where the feature is `alarmed`
-with its **PSI bar still visibly under the threshold**:
+the two do not cross together — KS is the more sensitive of the pair. Swept in 1-point steps: at
+`mean_fico = 691` KS is `0.0980` and the feature is **quiet**; at `690` KS is `0.1045` and it
+**alarms**. PSI does not cross `0.25` until `676` (`0.2520` — at `677` it is still `0.2352`). So
+across the whole band **677–690** the feature is `alarmed` with its **PSI bar still visibly under
+the threshold**:
 
 | mean_fico | PSI | KS | verdict |
 |---|---|---|---|

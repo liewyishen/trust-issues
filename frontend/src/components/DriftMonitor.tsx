@@ -313,10 +313,11 @@ function FeaturePanel({
    * The one thing a "PSI + alarm" panel would get visibly wrong.
    *
    * The monitor alarms on EITHER signal, and the two do not cross together: KS is
-   * the more sensitive of the pair. Measured across this very slider, KS crosses
-   * its line at mean_fico ~691 and PSI does not cross its own until ~677. So there
-   * is a real band -- roughly 677 to 691 -- where the feature is ALARMED with its
-   * PSI bar still sitting comfortably under the threshold.
+   * the more sensitive of the pair. Measured across this very slider in 1-point
+   * steps: at mean_fico 691 KS is 0.0980 and the feature is QUIET; at 690 KS is
+   * 0.1045 and it ALARMS. PSI does not cross 0.25 until 676 (0.2520 -- at 677 it
+   * is still 0.2352). So the band where the feature is ALARMED with its PSI bar
+   * sitting comfortably under the threshold is 677..690.
    *
    * Rendering `alarmed` next to a PSI bar and calling it a day would put a red
    * ALARM badge above a bar that has visibly crossed nothing, and the honest

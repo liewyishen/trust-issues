@@ -1,15 +1,19 @@
 """
-The HTTP boundary. Three routes, one adapter function, no scoring logic.
+The HTTP boundary. Four routes, one adapter function, no scoring logic.
 
     GET  /healthz     readiness, plus the identity of what is loaded
     GET  /calibrator  the shipped calibrator's own shape, off the loaded bundle
     POST /score       one applicant -> decision + rank-ordered reason codes
+    POST /drift       the drift demo's FICO knob -> the real monitor's verdict
+                      (DEV ONLY -- absent from the production image, see
+                      DRIFT_DEMO_AVAILABLE)
 
 Run:  uvicorn serving.app:app --host 0.0.0.0 --port 8000
 """
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -27,6 +31,8 @@ from serving.errors import (
 )
 from serving.schema import (
     CalibratorResponse,
+    DriftRequest,
+    DriftResponse,
     HealthResponse,
     ScoredCreditReport,
     ScoreRequest,
@@ -35,6 +41,48 @@ from serving.schema import (
 from src.explain import explain_applicants
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# DRIFT_DEMO_AVAILABLE -- whether POST /drift can be mounted HERE.
+#
+# /drift answers with pipelines/drift_check.py's real PSI/KS/alarms, reached
+# through scripts/demo_drift.py's drift_report(). Neither module is importable
+# in the production container, and that is deliberate on both counts:
+#
+#   .dockerignore excludes pipelines/, and the Dockerfile COPYs only src/,
+#   serving/ and models/ -- so scripts/ and pipelines/ are not in the image.
+#   The Dockerfile then installs `uv sync --no-group training`, which excludes
+#   mlflow and metaflow -- and drift_check.py imports mlflow at module scope,
+#   and pipelines/training_flow.py (which it imports from) needs metaflow.
+#
+# So importing drift_report at module scope here would kill the container at
+# boot, on `import serving.app`, before a single request. It would also drag
+# mlflow + metaflow back into the serving dependency set -- undoing the
+# [dependency-groups] split whose entire purpose is keeping them out, and
+# falsifying pyproject.toml's claim that neither "appears in sys.modules after
+# `import serving.app`" (a claim tests/test_serving.py now enforces rather than
+# merely asserts in prose).
+#
+# The honest reading is that /drift is a DEMO route, not a production one. It
+# monitors a synthetic population drawn from MockBureau; there is no real
+# applicant stream to watch at serve time, and the production drift path is the
+# batch job (`uv run python pipelines/drift_check.py`), which needs no HTTP at
+# all. So the route is mounted where its machinery exists -- local dev -- and is
+# simply not there in the image. find_spec probes for the module WITHOUT
+# importing it, so this costs nothing at startup and cannot itself drag mlflow
+# in; a real breakage inside demo_drift.py still raises loudly at create_app()
+# rather than being swallowed here.
+# ---------------------------------------------------------------------------
+def _drift_demo_importable() -> bool:
+    try:
+        return importlib.util.find_spec("scripts.demo_drift") is not None
+    except ModuleNotFoundError:
+        # scripts/ is not on the path at all -- i.e. the production image.
+        return False
+
+
+DRIFT_DEMO_AVAILABLE = _drift_demo_importable()
 
 # ---------------------------------------------------------------------------
 # CORS_ALLOW_ORIGINS -- the browser-frontend gate.
@@ -150,6 +198,7 @@ def get_bureau(request: Request) -> CreditBureau:
 def create_app(
     bundle: ArtifactBundle | None = None,
     bureau: CreditBureau | None = None,
+    drift_demo: bool = DRIFT_DEMO_AVAILABLE,
 ) -> FastAPI:
     """
     Build the app. Pass `bundle`/`bureau` to inject pre-built ones and skip
@@ -158,6 +207,13 @@ def create_app(
     passing `bundle` without `bureau` still runs lifespan's MockBureau()
     construction -- every current test passes both together. Production
     calls create_app() with neither and lets lifespan load both.
+
+    `drift_demo` mounts POST /drift. It defaults to DRIFT_DEMO_AVAILABLE -- true
+    in the repo, false in the container -- so the route appears in dev and is
+    absent in production without anyone having to remember a flag. Pass it
+    explicitly to force either way; passing True where the machinery is missing
+    raises at construction, which is the intended failure (a 404 would be the
+    service quietly disagreeing with the caller about what it is).
     """
     app = FastAPI(
         title="trust-issues credit scoring",
@@ -294,6 +350,59 @@ def create_app(
                 pulled_at=report.pulled_at,
             ),
         )
+
+    if drift_demo:
+
+        @app.post("/drift", response_model=DriftResponse)
+        async def drift(request: DriftRequest) -> DriftResponse:
+            """
+            Turn the drift demo's FICO knob and return what the REAL monitor said.
+
+            This handler computes nothing. drift_report() (scripts/demo_drift.py)
+            draws the two populations out of MockBureau and hands them to
+            pipelines/drift_check.py's drift_metrics() and evaluate_alarms() --
+            the same functions the batch job calls, on the same
+            DEFAULT_ALARM_THRESHOLDS. There is no PSI in serving/, no KS in
+            serving/, and no alarm rule in serving/. A second implementation
+            here would put a number on the client's screen that the monitor that
+            actually runs would never produce -- which is drift between two
+            sources of truth, in the endpoint built to demonstrate drift.
+
+            Deterministic: same mean_fico in, byte-identical numbers out (fixed
+            applicant ids, hash-seeded MockBureau). A client can drag a slider
+            and get a curve rather than a shimmer, and a demo can be repeated
+            exactly.
+
+            No Depends(get_bundle), unlike every other route here, and that is
+            not an oversight. The distribution monitor touches no model: PSI, KS
+            and the alarms are computed from the population's fico_n/dti_n alone.
+            drift_check.py's ONE model-dependent signal is the calibration gap,
+            which needs real labels -- a synthetic MockBureau population has no
+            defaults to be right or wrong about -- so it is not part of this
+            demo, and the artifacts it would need are not a dependency of this
+            route. Declaring one anyway would be decoration, and would make a
+            missing model look like a reason the drift monitor cannot run.
+            """
+            # Imported INSIDE the handler, and this is the whole reason /drift
+            # can exist on this app at all. `app = create_app()` runs at module
+            # scope, so importing drift_report anywhere above this line would
+            # put mlflow + metaflow + pipelines into serving.app's import graph
+            # (measured: `import serving.app` pulls all three, +1.3s) -- exactly
+            # what the [dependency-groups] split and the slim image exist to
+            # prevent, and what tests/test_serving.py's subprocess guard now
+            # enforces. Deferring it to the first request keeps the module graph
+            # clean and costs one 1.3s import, once, on a demo route.
+            #
+            # The trade is deliberate and it is a real trade: a breakage inside
+            # demo_drift.py surfaces here as a 500 on the first call, not as a
+            # startup crash. That is acceptable HERE and would not be for the
+            # artifacts -- a bad model must never serve a request, whereas an
+            # unimportable demo route just fails to demo. tests/test_demo_drift.py
+            # imports the module directly, so the breakage is caught in CI either
+            # way.
+            from scripts.demo_drift import drift_report
+
+            return DriftResponse(**drift_report(request.mean_fico))
 
     return app
 

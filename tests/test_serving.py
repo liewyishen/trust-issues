@@ -56,6 +56,16 @@ HTTP boundary and of nothing beneath it:
      with, threshold included, so a client draws the reject line where the
      service actually puts it.
  15. CORS admits the enumerated dev origins and nothing else -- never "*".
+ 16. POST /drift returns pipelines/drift_check.py's OWN PSI/KS/alarms -- the
+     monitor that actually runs -- never a second implementation of them. The
+     FICO knob at 700 leaves fico_n quiet and at 650 makes it fire, while dti_n
+     (which the knob does not touch) stays quiet in BOTH: the negative control
+     is what makes the alarm mean something.
+ 17. `import serving.app` pulls in NO mlflow, NO metaflow and NO pipelines.
+     pyproject.toml has always CLAIMED this -- it is why the serving image can
+     skip the training dependency group and stay ~937MB -- and nothing enforced
+     it. /drift is the first route whose machinery lives behind that line, so
+     this is where the line gets a test.
 
 Plus, carried across the HTTP boundary from tests/test_explain.py: no
 probability-scale contribution leaks into the response.
@@ -65,7 +75,11 @@ Run:  pytest tests/test_serving.py -v
 
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -74,14 +88,20 @@ import joblib
 import shap
 from fastapi.testclient import TestClient
 
+# The drift monitor's OWN thresholds. Imported, never retyped -- the tests below
+# assert "over / under the line the monitor actually uses", which is the same
+# discipline tests/test_demo_drift.py holds. A hardcoded 0.25 here would be a
+# second copy of the alarm rule inside the test that exists to prove there is
+# only one.
+from pipelines.drift_check import DEFAULT_ALARM_THRESHOLDS
 import src.explain as src_explain
-from src.data_validation import VALID_HOME_OWNERSHIP, VALID_PURPOSE
+from src.data_validation import FICO_MAX, FICO_MIN, VALID_HOME_OWNERSHIP, VALID_PURPOSE
 from src.features import CATEGORICAL, FEATURES, TARGET, emp_order
 from src.model_io import _x, load_model_artifact, train_lgb
 from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
 from src.explain import DEFAULT_EXPLAIN_THRESHOLD, explain_applicants
 
-from serving.app import create_app
+from serving.app import DRIFT_DEMO_AVAILABLE, create_app
 from serving.artifacts import load_bundle
 from serving.bureau import CreditBureau, CreditReport, MockBureau
 from serving.config import SELECTED_THRESHOLD
@@ -822,3 +842,232 @@ def test_cors_does_not_admit_an_unlisted_origin(client):
         },
     )
     assert "access-control-allow-origin" not in r.headers
+
+
+# ---------------------------------------------------------------------------
+# 16. POST /drift -- the drift demo's FICO knob, over HTTP.
+#
+#     The endpoint's entire claim is that it is a WRAPPER: the PSI on the wire is
+#     the PSI pipelines/drift_check.py computes, not one the serving layer worked
+#     out for itself. So the tests that matter are (a) the numbers are the
+#     monitor's, proven by identity and by interception, and (b) the demo's
+#     BEHAVIOR survives the HTTP boundary -- quiet at 700, firing at 650, with
+#     dti_n silent throughout.
+#
+#     The thresholds are never restated here. Every assertion below is tested
+#     against DEFAULT_ALARM_THRESHOLDS, imported from the monitor, for the same
+#     reason tests/test_demo_drift.py does it: an exact PSI hardcoded into a test
+#     is a number that has to be re-typed the day the mock changes, and re-typing
+#     is how the test and the thing it tests stop agreeing.
+# ---------------------------------------------------------------------------
+def test_drift_at_700_leaves_fico_quiet(client):
+    body = client.post("/drift", json={"mean_fico": 700.0}).json()
+    fico = body["features"]["fico_n"]
+    assert fico["psi"] < DEFAULT_ALARM_THRESHOLDS["psi"]
+    assert fico["ks"] < DEFAULT_ALARM_THRESHOLDS["ks"]
+    assert fico["alarmed"] is False
+
+
+def test_drift_at_650_makes_fico_fire(client):
+    body = client.post("/drift", json={"mean_fico": 650.0}).json()
+    fico = body["features"]["fico_n"]
+    assert fico["psi"] > DEFAULT_ALARM_THRESHOLDS["psi"]
+    assert fico["ks"] > DEFAULT_ALARM_THRESHOLDS["ks"]
+    assert fico["alarmed"] is True
+
+
+def test_dti_is_an_unmoved_negative_control_at_both_settings(client):
+    """The one that makes the other two mean anything.
+
+    MockBureau seeds dti_n off the applicant_id hash and never off mean_fico, and
+    both settings draw the same applicant ids -- so dti_n is byte-identical at 700
+    and at 650. It must therefore report the SAME psi/ks at both, and stay quiet
+    at both. A monitor that lit up on dti_n too would not be detecting drift; it
+    would be detecting that something, somewhere, changed.
+
+    This is also the test that would have caught the tripwire trap. drift_check's
+    dti tripwire alarm names "dti_n" inside its explanatory prose, so deriving
+    `alarmed` by searching the alarm text for the column name would report the
+    negative control as FIRING at every setting of the knob -- and the demo's
+    central contrast would quietly invert.
+    """
+    quiet = client.post("/drift", json={"mean_fico": 700.0}).json()["features"]["dti_n"]
+    shifted = client.post("/drift", json={"mean_fico": 650.0}).json()["features"]["dti_n"]
+
+    assert quiet == shifted                    # the knob did not touch it, at all
+    for dti in (quiet, shifted):
+        assert dti["psi"] < DEFAULT_ALARM_THRESHOLDS["psi"]
+        assert dti["ks"] < DEFAULT_ALARM_THRESHOLDS["ks"]
+        assert dti["alarmed"] is False
+
+
+def test_the_same_knob_setting_returns_the_same_numbers(client):
+    """Deterministic end to end: fixed applicant ids, hash-seeded MockBureau, no
+    RNG anywhere on the path. Two identical requests must be byte-identical
+    responses -- which is what lets a client drag a slider and get a curve rather
+    than a shimmer, and what lets a demo be repeated exactly."""
+    first = client.post("/drift", json={"mean_fico": 650.0}).json()
+    second = client.post("/drift", json={"mean_fico": 650.0}).json()
+    assert first == second
+
+
+def test_the_endpoint_computes_nothing_it_calls_the_real_monitor(client, monkeypatch):
+    """THE test. Everything else here would still pass against a serving-layer
+    reimplementation of PSI that happened to agree; this one would not.
+
+    Two claims, in order. First, the functions the demo module holds ARE
+    drift_check's -- identity, not same-named copies that could drift apart.
+    Second, the endpoint actually goes THROUGH them: drift_metrics is wrapped in a
+    spy, and if the response's PSI can be produced without that spy being called,
+    then some other code computed it.
+    """
+    import pipelines.drift_check as monitor
+    import scripts.demo_drift as demo
+
+    assert demo.drift_metrics is monitor.drift_metrics
+    assert demo.evaluate_alarms is monitor.evaluate_alarms
+
+    calls: list[tuple] = []
+
+    def spy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return monitor.drift_metrics(*args, **kwargs)
+
+    monkeypatch.setattr(demo, "drift_metrics", spy)
+    body = client.post("/drift", json={"mean_fico": 650.0}).json()
+
+    assert calls, "POST /drift produced a PSI without calling drift_check.drift_metrics"
+    assert body["features"]["fico_n"]["alarmed"] is True
+
+
+def test_the_wire_numbers_are_the_demo_scripts_numbers(client):
+    """The endpoint and `uv run python scripts/demo_drift.py` cannot disagree,
+    because they are one code path. Asserted against drift_report() directly --
+    the same function the handler calls -- so a divergence could only come from
+    the HTTP layer reshaping something on the way out.
+    """
+    from scripts.demo_drift import drift_report
+
+    body = client.post("/drift", json={"mean_fico": 650.0}).json()
+    report = drift_report(650.0)
+
+    assert body["metrics"] == pytest.approx(report["metrics"])
+    assert body["alarms"] == report["alarms"]
+    assert body["features"]["fico_n"]["psi"] == pytest.approx(report["features"]["fico_n"]["psi"])
+
+
+def test_the_per_feature_view_is_a_rekeying_of_the_raw_metrics(client):
+    """`features` is a convenience, and the raw `metrics` it was re-keyed FROM
+    ships beside it -- which is what makes the convenience checkable instead of
+    trusted. If they ever disagreed, the flat dict is the one drift_check
+    actually produced."""
+    body = client.post("/drift", json={"mean_fico": 650.0}).json()
+    year = body["current_year"]
+
+    for column, feature in body["features"].items():
+        assert feature["psi"] == pytest.approx(body["metrics"][f"psi_{column}_{year}"])
+        assert feature["ks"] == pytest.approx(body["metrics"][f"ks_{column}_{year}"])
+
+
+def test_the_thresholds_are_the_monitors_own_and_arrive_unfiltered(client):
+    """A client draws the alarm line where the monitor actually trips -- the same
+    discipline that makes /calibrator ship the decision threshold rather than let
+    a client guess 0.25.
+
+    Unfiltered, too: the dti-specific sentinel/tripwire/calib_gap thresholds are
+    returned alongside psi/ks, so the client sees the whole rule set the monitor
+    ran under and not just the two lines that flatter the demo.
+    """
+    body = client.post("/drift", json={"mean_fico": 700.0}).json()
+    assert body["thresholds"] == pytest.approx(DEFAULT_ALARM_THRESHOLDS)
+
+
+def test_the_dti_tripwire_artifact_is_disclosed_not_filtered_out(client):
+    """The alarm that embarrasses the demo is left in the response.
+
+    MockBureau's dti_n is a uniform draw over [0, 1000), so ~90% of it lands in
+    drift_check's (100, 1000] tripwire band and the tripwire alarm fires at EVERY
+    setting of the knob. It is a mock artifact, not drift -- it reads identically
+    in the control and the downturn, which is exactly why it is not what the FICO
+    knob moves. Dropping it from `alarms` would make the demo look cleaner and
+    would be the one dishonest edit available here.
+    """
+    for mean_fico in (700.0, 650.0):
+        alarms = client.post("/drift", json={"mean_fico": mean_fico}).json()["alarms"]
+        assert any(a.startswith("tripwire_share_") for a in alarms)
+
+
+def test_the_knob_is_bounded_to_the_fico_band(client):
+    """mean_fico is the centre of a FICO distribution, so it is bounded by the
+    FICO band -- imported from src/data_validation.py, not retyped. Outside it
+    MockBureau's clipping piles the whole population onto one boundary value, and
+    the PSI computed off that spike would look like a dramatic finding and mean
+    nothing."""
+    assert client.post("/drift", json={"mean_fico": FICO_MIN - 1}).status_code == 422
+    assert client.post("/drift", json={"mean_fico": FICO_MAX + 1}).status_code == 422
+    assert client.post("/drift", json={"mean_fico": "650"}).status_code == 422   # strict float
+    assert client.post("/drift", json={"mean_fico": 650.0, "n": 10}).status_code == 422  # forbid
+
+
+def test_drift_is_absent_not_broken_when_the_demo_is_not_mounted(bundle):
+    """The production container's shape: scripts/ and pipelines/ are not in the
+    image, so DRIFT_DEMO_AVAILABLE is False there and /drift simply is not a route.
+
+    404, not 500. A route that exists and cannot work is worse than a route that
+    does not exist -- the first is a service lying about what it is.
+    """
+    app = create_app(bundle=bundle, bureau=MockBureau(), drift_demo=False)
+    assert TestClient(app).post("/drift", json={"mean_fico": 650.0}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 17. The serving import graph. pyproject.toml claims mlflow, metaflow and
+#     seaborn "never appear in sys.modules after `import serving.app`" -- that
+#     claim is why the Dockerfile can pass --no-group training and why the image
+#     is ~937MB instead of ~2.6GB. Nothing enforced it.
+#
+#     /drift is the first route whose machinery lives on the far side of that
+#     line (scripts/demo_drift.py -> pipelines/drift_check.py -> mlflow, and
+#     -> pipelines/training_flow.py -> metaflow). Importing drift_report at module
+#     scope, or even inside create_app(), would drag all three in -- `app =
+#     create_app()` runs at import. Measured: it does, and it costs 1.3s. The
+#     handler-level import in serving/app.py is what keeps this test true, and
+#     this test is what stops someone "tidying" that import up to the top of the
+#     file and silently breaking the container six weeks later.
+#
+#     A subprocess, because sys.modules in-process is already polluted by every
+#     other test that imported pipelines. A fresh interpreter is the only place
+#     the question can be asked honestly.
+# ---------------------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_importing_serving_app_pulls_in_no_training_dependency():
+    probe = (
+        "import sys; import serving.app; "
+        "print(','.join(m for m in ('mlflow', 'metaflow', 'seaborn', 'pipelines') "
+        "if m in sys.modules))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True, text=True, cwd=PROJECT_ROOT, check=True,
+    )
+    leaked = result.stdout.strip()
+    assert leaked == "", (
+        f"`import serving.app` now pulls in: {leaked}. Those are training-group "
+        "dependencies the serving image does not install (Dockerfile: uv sync "
+        "--no-group training) and, for pipelines/, does not even copy "
+        "(.dockerignore). The container would die at boot. If this broke because "
+        "a drift import moved to module scope, move it back into the handler "
+        "(serving/app.py)."
+    )
+
+
+def test_the_drift_route_is_mounted_here_and_would_not_be_in_the_image():
+    """DRIFT_DEMO_AVAILABLE is a probe, not a constant: it asks whether the demo's
+    machinery is importable from where the app is being built. In this repo it is.
+    In the image -- no scripts/, no pipelines/, no mlflow -- it is not, and the
+    route is simply absent. find_spec answers that WITHOUT importing anything,
+    which is what keeps the test above true."""
+    assert DRIFT_DEMO_AVAILABLE is True
+    assert importlib.util.find_spec("scripts.demo_drift") is not None

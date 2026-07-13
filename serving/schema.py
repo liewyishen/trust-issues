@@ -19,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from src.data_validation import (
     DTI_MAX_REAL,
     DTI_SENTINEL,
+    FICO_MAX,
+    FICO_MIN,
     LOAN_MAX,
     LOAN_MIN,
     REVENUE_MIN,
@@ -396,3 +398,128 @@ class CalibratorResponse(BaseModel):
     n_knots: int
     n_distinct_y: int
     threshold: float
+
+
+class DriftRequest(BaseModel):
+    """
+    The drift demo's one knob: the mean of MockBureau's FICO draw.
+
+    Not applicant data, and not a model input -- MockBureau's own docstring
+    (serving/bureau.py) calls mean_fico "a DRIFT-DEMO KNOB". One MockBureau
+    instance models one snapshot of a population's credit quality; moving this
+    number simulates that population shifting, and POST /drift asks the REAL
+    monitor (pipelines/drift_check.py) what it makes of the shift.
+
+    Bounded by FICO_MIN/FICO_MAX, imported from src/data_validation.py rather
+    than retyped, because a FICO distribution's center is a FICO. The bound is
+    not cosmetic: MockBureau CLIPS every draw into that same band, so a mean far
+    outside it produces a degenerate population piled entirely on one boundary
+    value -- a drift number computed off a spike, which would read as a dramatic
+    result and mean nothing. The band is where the knob has honest range.
+
+    Strict float and extra="forbid", for the same reasons ScoreRequest gives.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    mean_fico: float = Field(strict=True, ge=FICO_MIN, le=FICO_MAX)
+
+
+class FeatureDrift(BaseModel):
+    """
+    One monitored column's distribution signals, as drift_check.py computed them.
+
+    `alarmed` is drift_check.py's evaluate_alarms() verdict on THIS column's psi
+    and ks, not a re-test of psi against a threshold in the serving layer (see
+    feature_drift(), scripts/demo_drift.py). The serving layer owns no copy of
+    the alarm rule, which is the point of the endpoint existing at all.
+
+    Two columns are reported. fico_n is what the knob moves. dti_n is the
+    NEGATIVE CONTROL -- MockBureau seeds it off the same applicant_id hash but
+    never off mean_fico, so it must stay quiet while fico_n fires. A monitor that
+    alarmed on both would not be detecting drift, it would be detecting that
+    something changed; the contrast is the claim.
+    """
+
+    psi: float
+    ks: float
+    alarmed: bool
+
+
+class DriftResponse(BaseModel):
+    """
+    What the real monitor said, at one setting of the FICO knob.
+
+    Every number here is computed by pipelines/drift_check.py -- drift_metrics()
+    for psi/ks, evaluate_alarms() for the verdicts, DEFAULT_ALARM_THRESHOLDS for
+    the lines they are tested against. serving/ implements none of them. It is the
+    same monitor the batch job runs and the same one scripts/demo_drift.py drives;
+    a second PSI living in the serving layer would be precisely the two-sources
+    divergence this repo exists to prevent, and it would put a number on the screen
+    that the monitor never produced.
+
+    `thresholds` travels with the metrics for the same reason CalibratorResponse
+    ships the decision threshold: a client drawing the alarm line must draw it
+    where the monitor actually trips, not where it guessed. These are
+    DEFAULT_ALARM_THRESHOLDS verbatim (psi 0.25, ks 0.10, plus the dti-specific
+    sentinel/tripwire/calib_gap entries, which are returned unfiltered -- a client
+    is shown the whole rule set the monitor ran under, not the two lines that
+    flatter the demo).
+
+    `metrics` and `alarms` are drift_check.py's OWN outputs, unedited: the flat
+    metrics dict as logged, and the human-readable alarm strings as raised.
+    `features` is a re-keying of `metrics`, and shipping the thing it was re-keyed
+    from is what makes the re-keying checkable rather than trusted.
+
+    ------------------------------------------------------------------------
+    THE dti TRIPWIRE FIRES IN EVERY RUN, AND IT IS A MOCK ARTIFACT.
+
+    `alarms` will always contain a tripwire_share alarm at ~0.90, at every setting
+    of the knob. It is not drift. drift_check.py's tripwire probes for the real
+    2016+ DTI reporting regime (dti_n in (100, 1000]), and MockBureau's dti_n is a
+    crude uniform draw over [0, 1000) -- so ~90% of the mock's DTI lands in that
+    band by construction. It reads identically in the control and the downturn,
+    which is exactly why it is not what the FICO knob moves.
+
+    It is left IN `alarms` rather than filtered out. Silently dropping the one
+    alarm that embarrasses the demo would be the dishonest move available here,
+    and it is the reason `features[...].alarmed` is derived by key rather than by
+    searching the alarm text for a column name: the tripwire's own message
+    mentions dti_n in its prose, so a text search would report the negative
+    control as firing (see feature_drift(), scripts/demo_drift.py).
+    ------------------------------------------------------------------------
+
+    `reference_year` / `current_year` are MONITOR SLICE LABELS (2015 / 2016), not
+    a claim about real LendingClub data from those years. drift_metrics() keys its
+    windows on an issue_year column, so the two synthetic batches need year labels
+    to be sliced apart; these are those labels. They are returned so a client can
+    build the flat `metrics` keys (psi_fico_n_2016, ...) instead of hardcoding a
+    year it would have had to guess.
+
+    `observed_mean_fico_*` is what the batch actually DREW, against the
+    `mean_fico` that was asked for. They diverge near the FICO band's edges,
+    because MockBureau clips every draw into [FICO_MIN, FICO_MAX]. Reporting only
+    the requested mean would hide the clipping at exactly the settings where it
+    dominates the result.
+    """
+
+    # The knob, as requested -- and the reference it is being compared against,
+    # which is fixed at MEAN_NORMAL (700) and never moves.
+    mean_fico: float
+    reference_mean_fico: float
+    observed_mean_fico_reference: float
+    observed_mean_fico_current: float
+
+    # Monitor slice labels, not real years. See the docstring.
+    reference_year: int
+    current_year: int
+    n_reference: int
+    n_current: int
+
+    # keyed by column: "fico_n" (what the knob moves) and "dti_n" (the control).
+    features: dict[str, FeatureDrift]
+
+    # drift_check.py's own outputs, unedited.
+    thresholds: dict[str, float]
+    alarms: list[str]
+    metrics: dict[str, float]

@@ -53,6 +53,23 @@ MockBureau seeds its draws from them, so every run prints byte-identical
 numbers. Reproduce with:
 
     uv run python scripts/demo_drift.py
+
+Also served over HTTP
+---------------------
+serving/app.py's POST /drift is a wrapper over drift_report() below -- the same
+sampling path, the same monitor() call, the same drift_check.py functions, with
+`mean_fico` as the knob instead of the two settings main() hardcodes. It exists
+so a browser can turn the knob and watch PSI move. It computes no drift metric
+of its own; if it did, the number on the screen would be a number the monitor
+never produced, which is the exact failure this repo is about.
+
+That route is NOT part of the production image, and cannot be. This module
+imports pipelines/drift_check.py, which imports mlflow and (via
+pipelines/training_flow.py) metaflow -- and the serving image installs neither
+(Dockerfile: `uv sync --no-group training`) and copies neither scripts/ nor
+pipelines/ (.dockerignore). So serving/app.py imports this lazily and mounts
+/drift only where it is importable: present in local dev, absent from the
+container. See DRIFT_DEMO_AVAILABLE (serving/app.py).
 """
 
 from __future__ import annotations
@@ -90,6 +107,23 @@ YEAR_CUR = 2016             # NOT a claim about real LendingClub 2015/2016 data)
 MONITORED = ("fico_n", "dti_n")
 
 
+def reference_ids() -> list[str]:
+    """The reference population's applicant ids. Fixed strings, never drawn."""
+    return [f"ref-{i:04d}" for i in range(N)]
+
+
+def current_ids() -> list[str]:
+    """
+    The current population's applicant ids -- the SAME set at every mean_fico.
+
+    Sharing one id set across the knob's settings is what makes dti_n a negative
+    control: MockBureau seeds both draws off the same hash of the id, and only
+    fico_n reads mean_fico, so holding the ids fixed shifts every fico_n by the
+    knob while leaving every dti_n byte-identical.
+    """
+    return [f"cur-{i:04d}" for i in range(N)]
+
+
 def build_batch(bureau: MockBureau, ids: list[str], issue_year: int) -> pd.DataFrame:
     """
     Fetch every id through `bureau` and shape the reports into the flat frame
@@ -108,13 +142,18 @@ def build_batch(bureau: MockBureau, ids: list[str], issue_year: int) -> pd.DataF
     )
 
 
-def run_monitor(reference: pd.DataFrame, current: pd.DataFrame, title: str) -> dict:
+def monitor(reference: pd.DataFrame, current: pd.DataFrame) -> tuple[dict[str, float], list[str]]:
     """
-    Feed one reference/current pair to the REAL monitor and print its verdict.
+    The monitor call itself: drift_check.py's drift_metrics + evaluate_alarms,
+    invoked exactly as the pipeline invokes them, on default thresholds.
 
-    drift_metrics + evaluate_alarms are drift_check.py's own functions, called
-    exactly as the pipeline calls them; this function only arranges the two
-    year-labeled batches into one frame and prints the result.
+    Extracted out of run_monitor() so that the HTTP endpoint (serving/app.py's
+    POST /drift) reaches the monitor THROUGH THIS FUNCTION rather than
+    assembling its own frame and issuing its own drift_metrics call. Those would
+    be four lines each -- which columns, which reference window, which current
+    window, what concat order -- and four lines are more than enough room for the
+    endpoint's monitor and the demo's monitor to answer differently. There is one
+    of them.
     """
     frame = pd.concat([reference, current], ignore_index=True)
     metrics = drift_metrics(
@@ -123,7 +162,95 @@ def run_monitor(reference: pd.DataFrame, current: pd.DataFrame, title: str) -> d
         reference_years=(YEAR_REF, YEAR_REF),
         current_years=(YEAR_CUR,),
     )
-    alarms = evaluate_alarms(metrics)  # default thresholds -- nothing relaxed
+    return metrics, evaluate_alarms(metrics)  # default thresholds -- nothing relaxed
+
+
+def feature_drift(metrics: dict[str, float], column: str) -> dict:
+    """
+    One monitored column's distribution signals, and whether the monitor alarmed
+    on THEM.
+
+    `alarmed` is not recomputed from a threshold here. It is drift_check.py's own
+    evaluate_alarms(), run a second time over exactly this column's two keys --
+    so the answer comes from the alarm rule itself, at the alarm rule's own
+    thresholds. Writing `psi > 0.25` in this function would be a second copy of
+    that rule, and a second copy is the one that goes stale.
+
+    Selecting this column's alarms BY KEY, rather than by searching the full
+    alarm list for the column's NAME, is the part that took a bug to get right.
+    The dti tripwire's alarm string spells out "...training years hold exactly
+    zero dti_n in (100, 1000]..." in its EXPLANATORY PROSE, so `"dti_n" in alarm`
+    is True for an alarm that is not a dti_n distribution alarm at all -- and
+    dti_n is the NEGATIVE CONTROL, so it would have reported itself as firing in
+    the one place its silence is the whole point. (run_monitor's fico/other split
+    below is safe from this only because "fico_n" happens not to appear in any
+    other alarm's text. That is luck, not design, and not a thing to build a
+    response field on.)
+    """
+    psi_key, ks_key = f"psi_{column}_{YEAR_CUR}", f"ks_{column}_{YEAR_CUR}"
+    own = {psi_key: metrics[psi_key], ks_key: metrics[ks_key]}
+    return {
+        "psi": metrics[psi_key],
+        "ks": metrics[ks_key],
+        "alarmed": bool(evaluate_alarms(own)),
+    }
+
+
+def drift_report(mean_fico: float) -> dict:
+    """
+    Turn the FICO knob to `mean_fico`, run the real monitor, return everything it
+    said. The demo's whole argument, as data instead of as an ASCII table.
+
+    This is the ONE sampling path -- reference population at MEAN_NORMAL, current
+    population at `mean_fico`, over the same two fixed id sets main() uses -- and
+    it reaches the metrics through monitor(), the one monitor call. serving/'s
+    POST /drift is a wrapper over this function and nothing else; it computes no
+    PSI, no KS and no alarm of its own.
+
+    Deterministic: no RNG lives on this path (fixed ids, hash-seeded MockBureau),
+    so the same mean_fico returns byte-identical numbers on every call, in every
+    process, forever. That is what lets a client drag a slider and get a curve
+    rather than a shimmer.
+
+    The raw `metrics` and `alarms` are returned ALONGSIDE the per-feature view,
+    not replaced by it: `features` is a re-keying of `metrics`, and shipping the
+    thing it was re-keyed from is what makes the re-keying checkable. It is also
+    where the disclosed mock artifact lives -- the dti tripwire fires at ~0.90 in
+    every run because MockBureau's dti_n is a crude uniform draw (see the module
+    docstring), and that alarm is in `alarms` rather than filtered out of it.
+    """
+    reference = build_batch(MockBureau(mean_fico=MEAN_NORMAL), reference_ids(), YEAR_REF)
+    current = build_batch(MockBureau(mean_fico=mean_fico), current_ids(), YEAR_CUR)
+    metrics, alarms = monitor(reference, current)
+
+    return {
+        "mean_fico": float(mean_fico),
+        "reference_mean_fico": MEAN_NORMAL,
+        "reference_year": YEAR_REF,
+        "current_year": YEAR_CUR,
+        "n_reference": int(metrics["n_reference"]),
+        "n_current": int(metrics[f"n_{YEAR_CUR}"]),
+        # What the batches actually DREW, not what the knob asked for. They differ:
+        # MockBureau clips each draw into [FICO_MIN, FICO_MAX], so pushing the knob
+        # toward either bound pulls the observed mean off the requested one. A demo
+        # that showed only the requested mean would hide its own clipping.
+        "observed_mean_fico_reference": float(reference["fico_n"].mean()),
+        "observed_mean_fico_current": float(current["fico_n"].mean()),
+        "features": {column: feature_drift(metrics, column) for column in MONITORED},
+        "thresholds": dict(DEFAULT_ALARM_THRESHOLDS),
+        "alarms": alarms,
+        "metrics": metrics,
+    }
+
+
+def run_monitor(reference: pd.DataFrame, current: pd.DataFrame, title: str) -> dict:
+    """
+    Feed one reference/current pair to the REAL monitor and print its verdict.
+
+    The metrics come from monitor() above -- drift_check.py's own functions,
+    called exactly as the pipeline calls them. This function prints them.
+    """
+    metrics, alarms = monitor(reference, current)
 
     ref_fico = reference["fico_n"].mean()
     cur_fico = current["fico_n"].mean()
@@ -176,11 +303,10 @@ def run_monitor(reference: pd.DataFrame, current: pd.DataFrame, title: str) -> d
 
 
 def main() -> None:
-    ref_ids = [f"ref-{i:04d}" for i in range(N)]
-    cur_ids = [f"cur-{i:04d}" for i in range(N)]
+    cur_ids = current_ids()
 
     # One reference population at mean_fico=700, labeled YEAR_REF.
-    reference = build_batch(MockBureau(mean_fico=MEAN_NORMAL), ref_ids, YEAR_REF)
+    reference = build_batch(MockBureau(mean_fico=MEAN_NORMAL), reference_ids(), YEAR_REF)
 
     # Two current populations sharing the SAME applicant_ids, labeled YEAR_CUR:
     # only the FICO knob differs (700 vs 650), so between them fico_n shifts by

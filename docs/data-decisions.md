@@ -984,3 +984,100 @@ says. Only the interpreter knows what it actually imports.
 **TODO:** none; this is a verification-method record. The three-unreached /
 one-tolerated split is stated in `pyproject.toml`, `docs/design.md` §4, and
 `README.md` as of `3e612cb`.
+
+
+---
+
+## The bureau's contribution to `/score` moves from three loose provenance fields to a nested `credit_report`, and the fetched `fico_n` goes in with it -- but the fetched `dti_n` does not
+
+**Date:** 2026-07-12.
+
+**Context:** a browser frontend was being built against `/score`, and its
+"credit report, fetched by the system" panel needed the FICO the bureau
+returned. It could not have it. `ScoreResponse` carried the three fields that
+said WHICH pull happened (`bureau`, `fico_version`, `credit_report_pulled_at`)
+and none that said what was IN it: the fetched `fico_n` was merged into the
+scored frame by `_to_raw_frame` (`serving/app.py`) and then never surfaced.
+Verified against a live request before anything was changed -- applicant
+`demo-001` scores on a bureau `fico_n` of 703.9270999057935, and that number
+appeared nowhere in the 200 it got back. (`contributions_log_odds["fico_n"]` is
+present, but that is a SHAP contribution in log-odds, not the value;
+`reason_codes` carries a `value` only when the feature is among the top adverse
+factors, which a strong FICO never is.) A client was told which report was
+pulled and never what the decision was made on.
+
+**The shape chosen, and the one rejected:** the obvious fix -- add `fico_n` as a
+fourth top-level key -- was rejected on naming grounds, which turned out to be
+structural grounds. `tests/test_serving.py`'s `BUREAU_PROVENANCE_KEYS` guarded
+the response's mirror invariant by naming the keys `/score` adds that
+`explain_applicants()` does not. Adding `fico_n` to that set would have made its
+name describe something three-quarters true: `fico_n` is DATA -- the value the
+booster consumed -- not provenance, and no honest name exists for a set holding
+both. The constant would have had to stretch. Instead the response nests:
+
+    ScoreResponse.credit_report: ScoredCreditReport   # serving/schema.py
+        fico_n        # the value the model actually scored on
+        bureau        # }
+        fico_version  # }  which pull supplied it
+        pulled_at     # }
+
+and `BUREAU_PROVENANCE_KEYS` was REMOVED rather than renamed, replaced by two
+constants that each describe exactly what they hold:
+`BUREAU_SOURCED_TOP_LEVEL_KEY = "credit_report"` (the one key `/score` adds) and
+`CREDIT_REPORT_KEYS` (the nested block's four -- explicitly not called
+"provenance", for the reason above).
+
+**The `dti_n` exclusion -- the decision this entry exists for.** `CreditReport`
+HAS a `dti_n`. `ScoredCreditReport` does not, and must not. `_to_raw_frame` takes
+`dti_n` from the REQUEST and leaves `report.dti_n` unread (the Phase 1
+bureau-wiring entry above records that). So a "credit report" block containing
+the pulled `dti_n` would show a client a bureau DTI sitting beside a decision
+computed from the applicant's self-reported one. Measured on the same live
+request:
+
+    request dti_n  (what was SCORED)              18.0
+    bureau  dti_n  (fetched, deliberately unused) 514.32
+
+That panel would have been a decision described one way and made another -- the
+exact failure this repo exists to prevent, and the exact cost the entry above
+("The 'move dti_n to the bureau' deferral has an unrecorded cost") measures. The
+omission is guarded, not merely intended:
+`test_scored_credit_report_does_not_carry_dti_n` asserts `dti_n` is absent from
+`ScoredCreditReport` AND present on `CreditReport`, so the absence is provably a
+choice; if someone drops `dti_n` from `CreditReport` entirely, the test goes red
+and forces them to read why. `applicant_id` and `inquiry_window_days` are
+excluded too, for smaller reasons recorded in `ScoredCreditReport`'s docstring.
+
+**`pulled_at` is a wire rename, not a move.** The old top-level name was
+`credit_report_pulled_at`; the prefix existed only to disambiguate it from
+`model_trained_at` / `calibrator_trained_at` at the top level. Nested, it would
+stutter (`credit_report.credit_report_pulled_at`) and -- the real reason -- would
+stop matching `CreditReport`'s own field name, which is what
+`test_scored_credit_report_invents_no_field_names` asserts the block's keys
+against (`CREDIT_REPORT_KEYS <= set(CreditReport.model_fields)`). That test is
+what makes "a client-facing subset of `CreditReport`" a fact rather than a
+docstring claim, and the old spelling could not satisfy it. A client reading
+`credit_report_pulled_at` will not find it.
+
+**The mirror invariant got stronger on the way through.** It was subtractive --
+`set(ScoreResponse.model_fields) - BUREAU_PROVENANCE_KEYS == set(explain keys)` --
+which would have passed just as happily if a fourth bureau key were added to both
+the model and the constant excusing it. It is now additive:
+`set(ScoreResponse.model_fields) == set(explain keys) | {"credit_report"}`. The
+count of keys `/score` adds is now pinned at exactly one.
+
+**Blast radius:** breaking on the wire (`bureau`, `fico_version`,
+`credit_report_pulled_at` all move and the last is renamed) and free in practice
+-- `frontend/` did not exist yet, so there was no client to break. This was the
+cheapest moment the change would ever have; it was taken then rather than after a
+consumer existed.
+
+**Disposition:** `src/` untouched -- no scoring logic changed, and no decision
+changes value. This is a response-SHAPE change. `README.md`, `docs/design.md`
+Section 5 and `docs/PROJECT_STATUS.md` were re-synced in the same commit as the
+code, so no window exists in which they describe the old shape.
+
+**TODO:** none. The Phase 1 bureau-wiring entry above still describes
+`ScoreResponse` "gaining three bureau-provenance fields"; that sentence was
+accurate when written and is left exactly as written, the same append-only
+discipline this file applies everywhere else. This entry supersedes it.

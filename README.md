@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-252%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-261%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -169,11 +169,21 @@ not a constant: `MockBureau(mean_fico=650)` shifts the entire output distributio
 deliberate knob for demonstrating a population-level credit-quality drift without touching
 a real bureau record.
 
-Every score response carries three provenance fields alongside the decision — `bureau`,
-`fico_version`, `credit_report_pulled_at` (the last three fields on `serving/schema.py`'s
-`ScoreResponse`) — the same "a decision must be able to identify the data it came from"
-principle already behind the `model_trained_at` / `calibrator_trained_at` fields on every
-response.
+Every score response carries the pull it was decided on, under a single nested
+`credit_report` key (`serving/schema.py`'s `ScoredCreditReport`): the **fetched `fico_n`
+itself** — the credit value the booster actually consumed — together with the `bureau`,
+`fico_version` and `pulled_at` that identify which pull supplied it. This is the same "a
+decision must be able to identify the data it came from" principle already behind the
+`model_trained_at` / `calibrator_trained_at` fields, carried one step further: a client is
+told not only *which* report was pulled but *what was in it*, so the decision can be
+checked against the data the decision used.
+
+The pulled `dti_n` is deliberately **not** in that block, even though `CreditReport` has
+one. `_to_raw_frame()` takes `dti_n` from the request and never reads `report.dti_n`, so
+showing the bureau's value beside the decision would display a number the decision did not
+use — under `MockBureau` those differ wildly (see `docs/data-decisions.md`). A block
+labelled "credit report" carries the credit data the model consumed, and nothing it did
+not.
 
 Honestly: `MockBureau` is, by its own docstring, "a `CreditBureau` that never calls a real
 vendor" — no real bureau is integrated. `serving/` answers
@@ -225,7 +235,7 @@ project exists to catch, so it is written the long way instead.
 | **MLflow** (SQLite backend) | Experiment tracking; the pipeline logs every stage's metrics into one run. Training-only as of Phase 2 — `serving/`'s import graph does not reach it (see "Serving layer" above) |
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
-| **pytest** | 252 tests across the modeling layer |
+| **pytest** | 261 tests across the modeling layer |
 
 ---
 
@@ -233,7 +243,7 @@ project exists to catch, so it is written the long way instead.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (252 passing)
+uv run pytest                                        # run the test suite (261 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 mlflow ui --backend-store-uri sqlite:///mlflow.db    # browse experiment tracking
@@ -269,5 +279,5 @@ serving/       FastAPI HTTP scoring adapter (/score, /healthz) + the credit-bure
                protocol/mock (bureau.py) -- not deployed (see docs/design.md §4)
 models/        Trained model + calibrator artifacts (gitignored)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (252 passing)
+tests/         pytest suite (261 passing)
 ```

@@ -132,11 +132,19 @@ Constraints a serving design must answer, not defects to apologize for.
   `fico_n` to the bureau but left `dti_n` on the request; `_to_raw_frame()` takes
   `dti_n` from the request and leaves the pulled `report.dti_n` unused. The
   bureau sources one of the two credit fields today, by design, not both.
-- **Every decision is returned with its pull's provenance.** `ScoreResponse`
-  carries `bureau`, `fico_version`, and `credit_report_pulled_at` from the
-  fetched `CreditReport`, so a decision made on a bureau-sourced `fico_n` records
-  which pull produced it — the provenance a real bureau integration would audit
-  against.
+- **Every decision is returned with the pull it was made on.** `ScoreResponse`
+  carries one nested `credit_report` key (`ScoredCreditReport`): the fetched
+  `fico_n` the booster actually scored on, plus the `bureau`, `fico_version` and
+  `pulled_at` identifying which pull supplied it. A decision made on a
+  bureau-sourced `fico_n` therefore ships both the value and the report's
+  identity — the provenance a real bureau integration would audit against, and
+  the datum needed to check the decision against it.
+- **The pulled `dti_n` is absent from that block, deliberately.** `CreditReport`
+  has a `dti_n`; the decision does not use it (`_to_raw_frame()` reads `dti_n`
+  off the request). A "credit report" block showing a DTI the model never
+  consumed would describe the decision one way while it was made another — see
+  `docs/data-decisions.md`, which measures how far apart the two values are under
+  `MockBureau`. The block carries what was scored, and nothing else.
 
 ## 6. Human-in-the-loop (not implemented)
 

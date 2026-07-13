@@ -1,8 +1,9 @@
 """
-The HTTP boundary. Two routes, one adapter function, no scoring logic.
+The HTTP boundary. Three routes, one adapter function, no scoring logic.
 
-    GET  /healthz   readiness, plus the identity of what is loaded
-    POST /score     one applicant -> decision + rank-ordered reason codes
+    GET  /healthz     readiness, plus the identity of what is loaded
+    GET  /calibrator  the shipped calibrator's own shape, off the loaded bundle
+    POST /score       one applicant -> decision + rank-ordered reason codes
 
 Run:  uvicorn serving.app:app --host 0.0.0.0 --port 8000
 """
@@ -15,6 +16,7 @@ from contextlib import asynccontextmanager
 
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from serving.artifacts import ArtifactBundle, load_bundle
 from serving.bureau import CreditBureau, CreditReport, MockBureau
@@ -23,10 +25,39 @@ from serving.errors import (
     ARTIFACTS_UNAVAILABLE_DETAIL,
     BUREAU_UNAVAILABLE_DETAIL,
 )
-from serving.schema import HealthResponse, ScoreRequest, ScoreResponse
+from serving.schema import (
+    CalibratorResponse,
+    HealthResponse,
+    ScoredCreditReport,
+    ScoreRequest,
+    ScoreResponse,
+)
 from src.explain import explain_applicants
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# CORS_ALLOW_ORIGINS -- the browser-frontend gate.
+#
+# The browser frontend (frontend/) runs on Vite's dev server and calls this API
+# cross-origin, which a browser refuses without this header. docs/PROJECT_STATUS.md
+# flagged CORS as "not yet added"; this is that addition.
+#
+# The origins are ENUMERATED, not "*", by policy. "*" would let any page on any
+# origin the user happens to have open call this API from their browser. Nothing
+# here is authenticated today, so "*" costs nothing TODAY -- and that is exactly
+# why it would be the wrong default to write down: it becomes a real hole the
+# moment a credential or a cookie is added, and nobody re-reads a middleware
+# argument that has always been there. allow_credentials is False for the same
+# reason: the service has no credentials to send, and saying so is cheaper than
+# discovering later that it does.
+#
+# Both spellings of localhost are listed because a browser treats them as
+# DIFFERENT origins: a page served from 127.0.0.1:5173 is not the same origin as
+# one from localhost:5173, and Vite will hand out either depending on how it is
+# reached.
+# ---------------------------------------------------------------------------
+CORS_ALLOW_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
 def _to_raw_frame(request: ScoreRequest, report: CreditReport) -> pd.DataFrame:
@@ -136,6 +167,14 @@ def create_app(
         ),
         lifespan=None if bundle is not None else lifespan,
     )
+    # See CORS_ALLOW_ORIGINS -- explicit origins, never "*".
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ALLOW_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+        allow_credentials=False,
+    )
     if bundle is not None:
         app.state.bundle = bundle
     if bureau is not None:
@@ -147,6 +186,42 @@ def create_app(
             status="ok",
             model_trained_at=bundle.model_trained_at,
             calibrator_trained_at=bundle.calibrator_trained_at,
+            threshold=bundle.threshold,
+        )
+
+    @app.get("/calibrator", response_model=CalibratorResponse)
+    async def calibrator(
+        bundle: ArtifactBundle = Depends(get_bundle),
+    ) -> CalibratorResponse:
+        """
+        The shipped calibrator's shape, read off the bundle /score already uses.
+
+        `bundle.calibrator` is the IsotonicRegression load_bundle() loaded at
+        startup and passed every one of its gates -- including load_calibrator's
+        model-binding check (calibrate.py), which raises if the calibrator was
+        fit against a different model instance. So the arrays served here cannot
+        describe a calibrator other than the one composing decisions on /score:
+        it is the same object, not a second read of the same path.
+
+        Depends(get_bundle) is not decoration -- it means an unloaded bundle is
+        a 503 here for exactly the reason it is one on /score, rather than this
+        route inventing its own way to load a pickle.
+
+        The threshold travels with the curve on purpose. A client that draws the
+        reject boundary needs the value the service decides at (SELECTED_THRESHOLD,
+        serving/config.py), and the only way to guarantee it draws the same line
+        the service uses is to hand it that line rather than let it assume 0.25 --
+        which is a real, different float (see SELECTED_THRESHOLD's comment).
+        """
+        cal = bundle.calibrator
+        y = cal.y_thresholds_.tolist()
+        return CalibratorResponse(
+            x_thresholds=cal.X_thresholds_.tolist(),
+            y_thresholds=y,
+            x_min=float(cal.X_min_),
+            x_max=float(cal.X_max_),
+            n_knots=len(cal.X_thresholds_),
+            n_distinct_y=len(set(y)),
             threshold=bundle.threshold,
         )
 
@@ -205,9 +280,19 @@ def create_app(
 
         return ScoreResponse(
             **results[0],
-            bureau=report.bureau,
-            fico_version=report.fico_version,
-            credit_report_pulled_at=report.pulled_at,
+            credit_report=ScoredCreditReport(
+                # The fico_n the model actually consumed: the same
+                # report.fico_n _to_raw_frame merged into the scored frame,
+                # read off the same CreditReport object. It cannot disagree
+                # with what was scored, because there is no second fetch.
+                #
+                # report.dti_n is NOT passed -- ScoredCreditReport has no such
+                # field, deliberately. See its docstring (schema.py).
+                fico_n=report.fico_n,
+                bureau=report.bureau,
+                fico_version=report.fico_version,
+                pulled_at=report.pulled_at,
+            ),
         )
 
     return app

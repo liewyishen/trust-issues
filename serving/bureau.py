@@ -6,12 +6,16 @@ CreditBureau on app.state (lifespan constructs MockBureau; create_app()
 accepts an injected one; get_bureau() resolves it per request), and the
 /score handler calls bureau.fetch(applicant_id) before scoring. `fico_n` is
 bureau-sourced -- ScoreRequest no longer carries the field, and ScoreResponse
-reports the pull's provenance (bureau, fico_version,
-credit_report_pulled_at). `dti_n` stays applicant-reported this round:
-report.dti_n is fetched but deliberately unused (see docs/data-decisions.md's
-"Phase 1 bureau wiring" entry). src/explain.py's explain_applicants() remains
-untouched -- app.py's _to_raw_frame() hands it the same seven-field raw frame
-as before, now assembled from two sources.
+returns the pull under a single nested `credit_report` key
+(serving/schema.py's ScoredCreditReport: the fetched fico_n, plus the bureau,
+fico_version and pulled_at that identify which pull produced it). `dti_n`
+stays applicant-reported this round: report.dti_n is fetched but deliberately
+unused (see docs/data-decisions.md's "Phase 1 bureau wiring" entry), and for
+that same reason it is deliberately absent from ScoredCreditReport -- a block
+labelled "credit report" must not show a DTI the decision did not use.
+src/explain.py's explain_applicants() remains untouched -- app.py's
+_to_raw_frame() hands it the same seven-field raw frame as before, now
+assembled from two sources.
 
 Two things this module refuses to do, on purpose:
 

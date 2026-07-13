@@ -9,10 +9,14 @@ HTTP boundary and of nothing beneath it:
   1. The threshold is the one select_threshold() chose (0.25000000000000006),
      not explain.py's literal 0.25, and the two decide differently at p_cal
      exactly 0.25.
-  2. ScoreResponse mirrors explain_applicants()'s dict key-for-key, PLUS three
-     bureau-provenance fields explain_applicants() knows nothing about. This
-     is the test that makes serving/ an adapter instead of a second
-     implementation, for everything explain_applicants() is responsible for.
+  2. ScoreResponse mirrors explain_applicants()'s dict key-for-key, PLUS exactly
+     one key of its own -- `credit_report`, a ScoredCreditReport that
+     explain_applicants() knows nothing about. This is the test that makes
+     serving/ an adapter instead of a second implementation, for everything
+     explain_applicants() is responsible for. The invariant is ADDITIVE (== the
+     explain keys | {"credit_report"}), not a subtraction of permitted extras,
+     so a second bureau key cannot be smuggled in alongside a constant that
+     excuses it.
   3. JSON null on emp_length IS "NI" -- byte-identical responses -- and an
      unmapped string is a 422, not a silent collapse onto null's encoding.
   4. No request that validates can produce the off-manifold state
@@ -40,12 +44,18 @@ HTTP boundary and of nothing beneath it:
      the construction count is the only thing that can hold the decision in
      place.
  13. fico_n comes from CreditBureau.fetch(applicant_id), not from the
-     request: the bureau is called with exactly the submitted applicant_id,
-     the three provenance fields it returns (bureau, fico_version,
-     credit_report_pulled_at) surface in the response, and the same
-     applicant_id scores reproducibly across independent /score calls -- the
-     same determinism MockBureau itself guarantees (tests/test_bureau.py),
-     now proven through the HTTP layer.
+     request: the bureau is called with exactly the submitted applicant_id, the
+     pull it returns surfaces in the response under `credit_report` -- the
+     fetched fico_n itself, plus the bureau/fico_version/pulled_at that identify
+     which pull produced it -- and the same applicant_id scores reproducibly
+     across independent /score calls, the same determinism MockBureau itself
+     guarantees (tests/test_bureau.py), now proven through the HTTP layer.
+     The pulled dti_n is deliberately NOT in that block: the decision did not
+     use it, so a block labelled "credit report" must not show it.
+ 14. GET /calibrator serves the shipped calibrator off the bundle /score decides
+     with, threshold included, so a client draws the reject line where the
+     service actually puts it.
+ 15. CORS admits the enumerated dev origins and nothing else -- never "*".
 
 Plus, carried across the HTTP boundary from tests/test_explain.py: no
 probability-scale contribution leaks into the response.
@@ -75,10 +85,30 @@ from serving.app import create_app
 from serving.artifacts import load_bundle
 from serving.bureau import CreditBureau, CreditReport, MockBureau
 from serving.config import SELECTED_THRESHOLD
-from serving.schema import EMP_LENGTH_NOT_DISCLOSED, VALID_EMP_LENGTH, ScoreRequest, ScoreResponse
+from serving.schema import (
+    EMP_LENGTH_NOT_DISCLOSED,
+    VALID_EMP_LENGTH,
+    ScoredCreditReport,
+    ScoreRequest,
+    ScoreResponse,
+)
 
 REASON_CODE_KEYS = {"rank", "feature", "value", "contribution_log_odds"}
-BUREAU_PROVENANCE_KEYS = {"bureau", "fico_version", "credit_report_pulled_at"}
+
+# The ONE key /score adds to explain_applicants()'s dict. Everything the bureau
+# contributes to the response lives under it (serving/schema.py's ScoreResponse).
+BUREAU_SOURCED_TOP_LEVEL_KEY = "credit_report"
+
+# ScoredCreditReport's full key set: one model input (fico_n) plus the three
+# fields that identify WHICH pull produced it.
+#
+# Deliberately NOT named "...PROVENANCE_KEYS" -- which is exactly what the three
+# loose top-level fields it replaces WERE called. fico_n is DATA, the value the
+# booster actually scored on; a set holding both data and provenance cannot
+# honestly be named after either half. The old constant would have had to stretch
+# to cover a fourth key it does not describe, so it was removed rather than
+# stretched.
+CREDIT_REPORT_KEYS = {"fico_n", "bureau", "fico_version", "pulled_at"}
 
 # One applicant that scores cleanly. Every test below mutates a copy of this.
 # This is the REQUEST shape: applicant_id + six applicant-reported fields.
@@ -235,15 +265,56 @@ def test_decision_is_reject_iff_p_cal_at_or_above_threshold(client, synthetic_sp
 def test_response_mirrors_explain_applicants_key_for_key(bundle, model_path, calibrator_path):
     """GOOD_RAW, not GOOD: explain_applicants() consumes the RAW model-input
     shape (has fico_n, no applicant_id), which is no longer identical to the
-    REQUEST shape now that fico_n is bureau-sourced. The three bureau fields
-    are subtracted because explain_applicants() doesn't produce them --
-    /score fills them in separately from the CreditReport it fetched."""
+    REQUEST shape now that fico_n is bureau-sourced.
+
+    ADDITIVE, not subtractive. The old form of this test subtracted a set of
+    permitted bureau keys from ScoreResponse and compared the remainder -- which
+    would have passed just as happily if a FOURTH bureau key were added to both
+    the model and the constant excusing it. This form pins the count: everything
+    on ScoreResponse is explain_applicants()'s, except exactly one key.
+    """
     direct = explain_applicants(
         pd.DataFrame([GOOD_RAW]), model_path=model_path,
         calibrator_path=calibrator_path, threshold=bundle.threshold,
     )[0]
-    non_bureau_fields = set(ScoreResponse.model_fields) - BUREAU_PROVENANCE_KEYS
-    assert non_bureau_fields == set(direct)
+    assert set(ScoreResponse.model_fields) == set(direct) | {BUREAU_SOURCED_TOP_LEVEL_KEY}
+
+
+def test_scored_credit_report_shape_is_exact():
+    assert set(ScoredCreditReport.model_fields) == CREDIT_REPORT_KEYS
+
+
+def test_scored_credit_report_invents_no_field_names():
+    """Every key served under `credit_report` is a real field on the CreditReport
+    the bureau actually returns (serving/bureau.py). This is what makes "a
+    client-facing SUBSET of CreditReport" a fact rather than a claim in a
+    docstring -- a field renamed or invented here cannot pass.
+
+    It is also what forced `pulled_at` over the old top-level spelling
+    `credit_report_pulled_at`: that name is not a CreditReport field, so under
+    this assertion it would fail. The rename is not cosmetic; it is the price of
+    being able to state the subset invariant at all.
+    """
+    assert CREDIT_REPORT_KEYS <= set(CreditReport.model_fields)
+
+
+def test_scored_credit_report_does_not_carry_dti_n():
+    """The pulled dti_n is fetched and deliberately NOT scored: _to_raw_frame
+    (serving/app.py) takes dti_n from the REQUEST and never reads report.dti_n.
+
+    Serving it inside a block labelled "credit report" would show a client a
+    bureau DTI beside a decision computed from the applicant's self-reported one
+    -- under MockBureau, a number drawn uniformly from [0, 1000) beside a
+    decision made on a self-reported 18 (docs/data-decisions.md's "move dti_n to
+    the bureau" entry measures the mock's distribution).
+
+    The second assertion is the load-bearing one: dti_n EXISTS on CreditReport,
+    so its absence from ScoredCreditReport is provably a choice and not an
+    oversight. If someone ever drops dti_n from CreditReport entirely, this test
+    goes red and forces them to read why it was omitted here.
+    """
+    assert "dti_n" not in ScoredCreditReport.model_fields
+    assert "dti_n" in CreditReport.model_fields
 
 
 def test_reason_code_key_set_is_exact(client):
@@ -592,15 +663,26 @@ def test_bureau_is_called_with_the_requests_applicant_id(bundle):
     assert spy.calls == [GOOD["applicant_id"]]
 
 
-def test_response_carries_bureau_provenance(client, bureau):
+def test_response_carries_the_pull_it_scored_on(client, bureau):
+    """Renamed from test_response_carries_bureau_provenance: it now guards more
+    than provenance. The fetched fico_n -- the credit value the booster actually
+    consumed -- travels with the three fields identifying which pull supplied it,
+    and the whole thing arrives under one nested key.
+
+    The fico_n assertion is the new one, and it is the reason the nesting exists:
+    before this, a client was told WHICH report was pulled but never what was IN
+    it, so it could not check the decision against the data the decision used.
+    """
     report = bureau.fetch(GOOD["applicant_id"])
-    body = client.post("/score", json=GOOD).json()
-    assert body["bureau"] == report.bureau == "mock"
-    assert body["fico_version"] == report.fico_version
+    cr = client.post("/score", json=GOOD).json()["credit_report"]
+
+    assert cr["fico_n"] == report.fico_n
+    assert cr["bureau"] == report.bureau == "mock"
+    assert cr["fico_version"] == report.fico_version
     # datetime round-trips through JSON as an ISO string (pydantic v2 emits a
     # "Z" suffix for UTC rather than "+00:00" -- parse both back to compare
     # the actual instant rather than the string spelling of it).
-    assert datetime.fromisoformat(body["credit_report_pulled_at"]) == report.pulled_at
+    assert datetime.fromisoformat(cr["pulled_at"]) == report.pulled_at
 
 
 def test_same_applicant_id_scores_reproducibly_through_http(client):
@@ -642,3 +724,101 @@ def test_the_shipped_artifact_passes_every_startup_gate():
     assert set(shipped.category_maps["home_ownership_n"]) == set(VALID_HOME_OWNERSHIP)
     assert shipped.threshold == SELECTED_THRESHOLD
     assert shipped.model_trained_at is not None
+
+
+# ---------------------------------------------------------------------------
+# 14. GET /calibrator serves the SHIPPED calibrator's own shape, off the bundle
+#     /score already decides with -- not a second read, and not a snapshot.
+#
+#     The point of the endpoint is that a client drawing the step function draws
+#     THE one in production. So the tests that matter are identity tests (served
+#     arrays ARE bundle.calibrator's) and threshold-agreement tests (the line the
+#     client draws is the line /score decides at), not shape trivia.
+# ---------------------------------------------------------------------------
+def test_calibrator_serves_the_loaded_calibrator_itself(client, bundle):
+    """Served arrays are the loaded IsotonicRegression's, value for value.
+
+    Holds for ANY bundle, including this fixture's synthetic one -- which is the
+    reason it is asserted against `bundle` rather than against 104/52. A test
+    that hardcoded the shipped numbers here would pass for the wrong reason the
+    day the fixture's synthetic calibrator happened to land on them.
+    """
+    body = client.get("/calibrator").json()
+    cal = bundle.calibrator
+
+    assert body["x_thresholds"] == cal.X_thresholds_.tolist()
+    assert body["y_thresholds"] == cal.y_thresholds_.tolist()
+    assert body["x_min"] == float(cal.X_min_)
+    assert body["x_max"] == float(cal.X_max_)
+    assert body["n_knots"] == len(cal.X_thresholds_)
+    assert body["n_distinct_y"] == len(set(cal.y_thresholds_.tolist()))
+
+
+def test_calibrator_threshold_is_the_one_score_decides_at(client):
+    """The reject line the client draws is the line the service actually uses.
+
+    /calibrator's threshold must equal the threshold /score puts in its own
+    response -- not DEFAULT_EXPLAIN_THRESHOLD (explain.py), which is the literal
+    0.25 and a different float (SELECTED_THRESHOLD's comment, serving/config.py).
+    A frontend that guessed 0.25 would draw a boundary the service does not
+    decide at; this is the test that makes guessing unnecessary.
+    """
+    drawn = client.get("/calibrator").json()["threshold"]
+    decided = client.post("/score", json=GOOD).json()["threshold"]
+    assert drawn == decided
+
+
+def test_calibrator_is_503_when_the_bundle_is_absent(bundle):
+    """Depends(get_bundle) is load-bearing: no bundle, no curve. Same reachable-
+    only-in-tests unloaded state as /score and /healthz (serving/errors.py)."""
+    app = create_app(bundle=bundle, bureau=MockBureau())
+    app.state.bundle = None
+    assert TestClient(app).get("/calibrator").status_code == 503
+
+
+@pytest.mark.skipif(not DEFAULT_MODEL_PATH.exists(), reason="shipped model artifact absent")
+def test_the_shipped_calibrator_is_a_52_level_step_function_over_104_knots():
+    """The numbers docs/explainability.md Section 4 reasons from, asserted against
+    the artifact the service would actually load -- so the document and the
+    shipped pickle cannot drift apart silently.
+
+    n_knots == 2 * n_distinct_y is the structure, not a coincidence: the knots
+    come in equal-valued PAIRS, one pair per flat block.
+    """
+    shipped = load_bundle()
+    body = TestClient(create_app(bundle=shipped, bureau=MockBureau())).get("/calibrator").json()
+
+    assert body["n_knots"] == 104
+    assert body["n_distinct_y"] == 52
+    assert body["n_knots"] == 2 * body["n_distinct_y"]
+    assert body["x_min"] == float(shipped.calibrator.X_min_)
+    assert body["x_max"] == float(shipped.calibrator.X_max_)
+    assert body["threshold"] == SELECTED_THRESHOLD
+
+
+# ---------------------------------------------------------------------------
+# 15. CORS admits the browser frontend, and ONLY the enumerated dev origins.
+#     "*" is not a wildcard this service is allowed to ship (CORS_ALLOW_ORIGINS,
+#     serving/app.py).
+# ---------------------------------------------------------------------------
+def test_cors_admits_the_vite_dev_origin(client):
+    r = client.options(
+        "/score",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert r.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_does_not_admit_an_unlisted_origin(client):
+    """The test that would fail if anyone "simplified" allow_origins to ["*"]."""
+    r = client.options(
+        "/score",
+        headers={
+            "Origin": "https://evil.example.com",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert "access-control-allow-origin" not in r.headers

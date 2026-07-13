@@ -215,19 +215,86 @@ class ReasonCode(BaseModel):
     contribution_log_odds: float
 
 
+class ScoredCreditReport(BaseModel):
+    """
+    The part of the credit pull the DECISION ACTUALLY USED, plus what identifies
+    the pull. Deliberately NOT the whole CreditReport (serving/bureau.py).
+
+    Field names are byte-aligned to CreditReport's own -- a client-facing SUBSET
+    of that model, never a re-spelling of it. tests/test_serving.py asserts
+    CREDIT_REPORT_KEYS <= set(CreditReport.model_fields), so a field name
+    invented here cannot survive.
+
+    ------------------------------------------------------------------------
+    `dti_n` IS ABSENT, AND THAT IS THE POINT.
+
+    CreditReport HAS a dti_n. The scoring path does not use it: _to_raw_frame
+    (serving/app.py) takes dti_n from the REQUEST and leaves `report.dti_n`
+    unread. Putting the pulled dti_n inside a block labelled "credit report"
+    would show a client a bureau DTI sitting beside a decision computed from the
+    applicant's self-reported one -- under MockBureau those are wildly different
+    numbers (see docs/data-decisions.md's "move dti_n to the bureau" entry, which
+    measures the mock's dti_n as uniform over [0, 1000)). That is a decision
+    described one way and made another, which is the single thing this repo
+    exists to prevent. So the block carries the credit value the model consumed
+    (fico_n) and nothing it did not.
+
+    `applicant_id` and `inquiry_window_days` are absent for smaller reasons.
+    The client sent applicant_id; the response echoes no other request field, and
+    echoing this one would imply the bureau resolved an identity it did not.
+    inquiry_window_days is a disclosed-invented mock placeholder
+    (_MOCK_INQUIRY_WINDOW_DAYS's comment, serving/bureau.py: "carries no
+    authority beyond 'a plausible mock value'") that feeds nothing -- serving it
+    would dress an armchair number as a bureau fact.
+    ------------------------------------------------------------------------
+
+    `pulled_at`, not `credit_report_pulled_at`. That prefix existed only to
+    disambiguate the field at the TOP LEVEL of ScoreResponse, where it sat beside
+    model_trained_at and calibrator_trained_at. Nested here the prefix would
+    stutter (credit_report.credit_report_pulled_at) and, worse, would stop
+    matching CreditReport's own field name -- which is what the subset invariant
+    above is asserted against. This is a WIRE-FORMAT RENAME, not a pure move: a
+    client reading credit_report_pulled_at will not find it.
+    """
+
+    # The one model input in this block: the value CreditBureau.fetch() returned
+    # and _to_raw_frame merged into the frame the booster scored. Data, not
+    # provenance -- which is why no constant naming this set may be called
+    # "provenance" (see CREDIT_REPORT_KEYS, tests/test_serving.py).
+    fico_n: float
+
+    # The three that identify WHICH pull produced the fico_n above.
+    bureau: str
+    fico_version: str
+    pulled_at: datetime
+
+
 class ScoreResponse(BaseModel):
     """
     Mirrors explain_applicants()'s returned dict key-for-key (explain.py), plus
-    three bureau-provenance fields (bureau, fico_version,
-    credit_report_pulled_at) that /score fills in from the CreditReport it
-    fetched -- explain_applicants() knows nothing about the bureau layer and
-    never returns these three keys itself.
+    EXACTLY ONE key of its own: `credit_report`, a ScoredCreditReport that /score
+    fills in from the CreditReport it fetched. explain_applicants() knows nothing
+    about the bureau layer and never returns that key itself.
+
+    The bureau's contribution used to be three loose top-level fields (bureau,
+    fico_version, credit_report_pulled_at). It is now one nested object, and the
+    fetched fico_n -- the credit value the model actually scored on -- is inside
+    it. Two things forced the nesting. The mirror invariant below was guarded by a
+    constant naming the permitted bureau keys, and a fourth loose key would have
+    made that constant name a set three-quarters provenance and one-quarter data
+    (fico_n being data) -- no honest name exists for such a set, so it was removed
+    rather than stretched; tests/test_serving.py now carries
+    BUREAU_SOURCED_TOP_LEVEL_KEY and CREDIT_REPORT_KEYS in its place, each
+    describing exactly what it holds. And the pull is one thing: a fico_n and the
+    identity of the report it came from belong together, because either without
+    the other is a claim nobody can audit.
 
     Every other field is not a reshaping of explain_applicants()'s dict, not a
-    subset of it, not a renaming of it. tests/test_serving.py asserts the two
-    key sets are equal after subtracting the three bureau fields, so this
-    model cannot drift from the function it serializes on anything
-    explain_applicants() itself is responsible for.
+    subset of it, not a renaming of it. tests/test_serving.py asserts
+    set(ScoreResponse.model_fields) == set(explain_applicants()'s keys) |
+    {"credit_report"} -- an ADDITIVE form, stronger than the subtraction it
+    replaced, which would have silently tolerated a fourth bureau key appearing
+    in both the model and the constant that excused it.
 
     There is no `contribution_to_probability` key, not even set to None.
     docs/explainability.md Section 5 proves percentage-point attribution is
@@ -269,15 +336,15 @@ class ScoreResponse(BaseModel):
     reason_codes: list[ReasonCode]
     model_trained_at: str | None
     calibrator_trained_at: str | None
-    # Bureau provenance -- filled in by /score from the CreditReport it
-    # fetched (serving/bureau.py), not by explain_applicants(), which knows
-    # nothing about the bureau layer. Same rationale as model_trained_at /
-    # calibrator_trained_at above: a decision that used a bureau-sourced
-    # fico_n is a claim about an applicant-and-report pair, and should be
-    # able to identify which report.
-    bureau: str
-    fico_version: str
-    credit_report_pulled_at: datetime
+    # The pull this decision was made on -- filled in by /score from the
+    # CreditReport it fetched (serving/bureau.py), not by explain_applicants(),
+    # which knows nothing about the bureau layer. Same rationale as
+    # model_trained_at / calibrator_trained_at above, carried one step further:
+    # a decision that used a bureau-sourced fico_n is a claim about an
+    # applicant-and-report PAIR, so it ships the value it scored on together
+    # with the identity of the report that supplied it. See ScoredCreditReport
+    # on why the pulled dti_n is not in there.
+    credit_report: ScoredCreditReport
 
 
 class HealthResponse(BaseModel):
@@ -288,4 +355,44 @@ class HealthResponse(BaseModel):
     status: Literal["ok"]
     model_trained_at: str | None
     calibrator_trained_at: str | None
+    threshold: float
+
+
+class CalibratorResponse(BaseModel):
+    """
+    The SHIPPED isotonic calibrator's own shape, read off the loaded artifact.
+
+    This exists so a client can draw the step function the service actually
+    decides with, rather than a snapshot of it copied into the client at some
+    point in the past. The arrays below are `IsotonicRegression.X_thresholds_`
+    and `.y_thresholds_` verbatim off the calibrator in ArtifactBundle
+    (serving/artifacts.py) -- the same object /score composes with the booster,
+    loaded once at startup through the same load_bundle() gates (which include
+    load_calibrator's model-binding check, calibrate.py). There is no second
+    read of the pickle and no separate path that could go stale against the
+    first.
+
+    `threshold` is bundle.threshold -- SELECTED_THRESHOLD (serving/config.py),
+    the value /score decides at. It is NOT src.explain's
+    DEFAULT_EXPLAIN_THRESHOLD, which is the literal 0.25 and a different float.
+    It is returned here for one reason: a client drawing the reject boundary
+    must draw it where the service actually puts it. A client that hardcoded
+    0.25 would be drawing a line the service does not use.
+
+    `n_distinct_y` is len(set(y_thresholds)) -- the number of levels in the step
+    function, 52 for the shipped calibrator against 104 knots. The knots come in
+    equal-valued PAIRS: each pair spans one flat block, and the ramp between two
+    blocks is the interval between one pair's last x and the next pair's first.
+    That two-to-one ratio is the whole reason percentage-point attribution is
+    undefined here -- see docs/explainability.md Section 4 -- and it is a fact
+    about the artifact, so it is served from the artifact rather than asserted
+    in prose a client would have to trust.
+    """
+
+    x_thresholds: list[float]
+    y_thresholds: list[float]
+    x_min: float
+    x_max: float
+    n_knots: int
+    n_distinct_y: int
     threshold: float

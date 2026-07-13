@@ -22,7 +22,7 @@
   <button id="exportBtn">Export as PNG</button>
 </div>
 <div class="wrap">
-<svg id="arch" xmlns="http://www.w3.org/2000/svg" width="1360" height="1072" viewBox="0 0 1360 1072"
+<svg id="arch" xmlns="http://www.w3.org/2000/svg" width="1360" height="1090" viewBox="0 0 1360 1090"
      role="img" aria-label="trust-issues architecture: Metaflow training flow, fail-closed gates, artifact contracts, and orphan modules">
 <style>
   text{font-family:ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;fill:#adbac7;}
@@ -67,11 +67,11 @@
     <path d="M0,0L10,5L0,10z" fill="#8b949e"/></marker>
 </defs>
 
-<rect x="0" y="0" width="1360" height="1072" fill="#0b0f14"/>
+<rect x="0" y="0" width="1360" height="1090" fill="#0b0f14"/>
 
 <!-- ======================= header ======================= -->
 <text class="sans title" x="24" y="28">trust-issues — the real wiring</text>
-<text class="sans sub end" x="1336" y="28">re-traced 2026-07-11 — Phase 2: model_io.py split from train.py · labels cite symbols, not line numbers · no box from memory</text>
+<text class="sans sub end" x="1336" y="28">re-traced 2026-07-13 — orphan + artifact rows completed (scripts/) · labels cite symbols, not line numbers · no box from memory</text>
 
 <!-- ======================= legend ======================= -->
 <rect class="cont" x="16" y="40" width="1328" height="68" rx="8"/>
@@ -284,38 +284,47 @@
 <text class="m85 mid halt" x="660" y="643">_predict_calibrated()</text>
 <text class="m85 mid halt" x="960" y="643">run_fairness_audit()</text>
 <!-- calibrator.pkl → upward consumer -->
-<line class="eh" x1="710" y1="672" x2="710" y2="654"/>
-<line class="eh" x1="710" y1="654" x2="740" y2="654"/>
+<line class="eh" x1="650" y1="672" x2="650" y2="654"/>
+<line class="eh" x1="650" y1="654" x2="740" y2="654"/>
 <line class="eh" x1="740" y1="654" x2="740" y2="574" marker-end="url(#mr)"/>
 <text class="m85 halt" x="750" y="658">_predict_calibrated()</text>
 
 <!-- ======================= artifacts ======================= -->
-<rect class="art" x="130" y="672" width="360" height="96" rx="6"/>
-<text class="bt" x="142" y="690">models/lgbm_model.pkl</text>
-<text class="m9" x="142" y="704">dict: booster + FEATURES + CATEGORICAL</text>
-<text class="m9" x="142" y="717">+ category_maps + best_iteration + trained_at</text>
-<text class="m9" x="142" y="730">(built in train_and_save())</text>
-<text class="m9 halt" x="142" y="746">loaded ONLY via load_model_artifact() —</text>
-<text class="m9 halt" x="142" y="759">✕ raises on feature-contract mismatch (model_io.py)</text>
+<rect class="art" x="24" y="672" width="330" height="96" rx="6"/>
+<text class="bt" x="36" y="690">models/lgbm_model.pkl</text>
+<text class="m9" x="36" y="704">dict: booster + FEATURES + CATEGORICAL</text>
+<text class="m9" x="36" y="717">+ category_maps + best_iteration + trained_at</text>
+<text class="m9" x="36" y="730">(built in train_and_save())</text>
+<text class="m9 halt" x="36" y="746">loaded ONLY via load_model_artifact() —</text>
+<text class="m9 halt" x="36" y="759">✕ raises on feature-contract mismatch (model_io.py)</text>
 
-<rect class="art" x="530" y="672" width="360" height="96" rx="6"/>
-<text class="bt" x="542" y="690">models/isotonic_calibrator.pkl</text>
-<text class="m9" x="542" y="704">dict: calibrator + model_path + model_trained_at</text>
-<text class="m9" x="542" y="717">(built in calibrate_model())</text>
-<text class="m9 halt" x="542" y="746">loaded via load_calibrator(model_artifact=…) —</text>
-<text class="m9 halt" x="542" y="759">✕ raises on stale trained_at (load_calibrator())</text>
+<rect class="art" x="370" y="672" width="330" height="96" rx="6"/>
+<text class="bt" x="382" y="690">models/isotonic_calibrator.pkl</text>
+<text class="m9" x="382" y="704">dict: calibrator + model_path + model_trained_at</text>
+<text class="m9" x="382" y="717">(built in calibrate_model())</text>
+<text class="m9 halt" x="382" y="746">loaded via load_calibrator(model_artifact=…) —</text>
+<text class="m9 halt" x="382" y="759">✕ raises on stale trained_at (load_calibrator())</text>
 
-<rect class="art" x="1040" y="672" width="290" height="96" rx="6"/>
-<text class="bt" x="1052" y="690">mlflow.db  (sqlite)</text>
-<text class="m9" x="1052" y="704">URI pinned: training_flow TRACKING_URI · train.py</text>
-<text class="m9" x="1052" y="717">runs: lr_baseline · lgbm_production</text>
-<text class="m9" x="1052" y="730">(+ calibrate / evaluate / fairness appends)</text>
-<text class="m9 rep" x="1052" y="746">drift_check — its own run (run_drift_check()),</text>
-<text class="m9 rep" x="1052" y="759">never appended onto lgbm_production (docstring)</text>
+<!-- NEW: the audit artifact. Written by an ORPHAN (scripts/audit_fairness.py), not by the flow. -->
+<rect class="art" x="716" y="672" width="300" height="96" rx="6"/>
+<text class="bt" x="728" y="690">models/fairness_audit.json</text>
+<text class="m9" x="728" y="704">~38 KB of DERIVED ratios — NOT the dataset</text>
+<text class="m9" x="728" y="717">50 EO ratios + CIs · sweep · ablation</text>
+<text class="m9" x="728" y="730">(built in build_audit(), audit_fairness.py)</text>
+<text class="m9 rep" x="728" y="746">COMMITTED — the two .pkl beside it are not</text>
+<text class="m9 halt" x="728" y="759">✕ bound to lgbm_model.pkl by trained_at</text>
+
+<rect class="art" x="1032" y="672" width="304" height="96" rx="6"/>
+<text class="bt" x="1044" y="690">mlflow.db  (sqlite)</text>
+<text class="m9" x="1044" y="704">URI pinned: training_flow TRACKING_URI · train.py</text>
+<text class="m9" x="1044" y="717">runs: lr_baseline · lgbm_production</text>
+<text class="m9" x="1044" y="730">(+ calibrate / evaluate / fairness appends)</text>
+<text class="m9 rep" x="1044" y="746">drift_check — its own run (run_drift_check()),</text>
+<text class="m9 rep" x="1044" y="759">never appended onto lgbm_production (docstring)</text>
 
 <!-- ======================= orphan container (painted FIRST so edges land on top) ======================= -->
 <!-- shrunk to wrap only drift_check: explain.py is no longer an orphan (wired as @explain) -->
-<rect class="orph" x="16" y="800" width="672" height="232" rx="8"/>
+<rect class="orph" x="16" y="800" width="1328" height="240" rx="8"/>
 
 <!-- ======================= contracts down to orphans (red) ======================= -->
 <line class="eh" x1="250" y1="768" x2="250" y2="826" marker-end="url(#mr)"/>
@@ -342,10 +351,35 @@
 <text class="m9 rep" x="52" y="938">logs to its own MLflow run 'drift_check' (MLFLOW_RUN_NAME) — never onto lgbm_production (docstring)</text>
 <text class="m85 grey" x="52" y="952">⇡ dashed edge: imports configure_mlflow() + log_metrics_to_run() from training_flow.py — code reuse, not invocation</text>
 
-<text class="sans sub grey" x="28" y="1022" style="font-weight:700">NOT WIRED INTO THE FLOW — a manual entry point; nothing (no CI, cron, or scheduler) invokes it automatically</text>
+<!-- orphan 2: scripts/audit_fairness.py -->
+<rect class="orph" x="680" y="830" width="648" height="102" rx="6"/>
+<text class="bt" x="692" y="850">scripts/audit_fairness.py</text>
+<text class="m85 grey ital end" x="1316" y="850">not wired into the flow</text>
+<text class="m95 wht" x="692" y="868">$ uv run python scripts/audit_fairness.py      README.md Setup · __main__ guard</text>
+<text class="m9" x="692" y="882">separate MANUAL entry point — main() / build_audit(); nothing schedules it</text>
+<text class="m9" x="692" y="896">calls run_fairness_audit() — the SAME audit @fairness runs — then puts a bootstrap CI on BOTH ablation variants</text>
+<text class="m9" x="692" y="910">loads the SHIPPED model via load_bundle() and records its trained_at into the artifact (build_audit())</text>
+<text class="m9 halt" x="692" y="924">✕ serving/fairness.py's is_stale() refuses it on a trained_at mismatch → 409, and no ratios are served</text>
+
+<!-- audit_fairness.py WRITES the artifact above. The flow does not. -->
+<line class="ef" x1="800" y1="830" x2="800" y2="772" marker-end="url(#mg)"/>
+<text class="m85" x="808" y="792">writes (main() → ARTIFACT_PATH)</text>
+
+<!-- orphan 3: scripts/demo_drift.py -->
+<rect class="orph" x="680" y="942" width="648" height="58" rx="6"/>
+<text class="bt" x="692" y="962">scripts/demo_drift.py</text>
+<text class="m85 grey ital end" x="1316" y="962">not wired into the flow</text>
+<text class="m95 wht" x="692" y="978">$ uv run python scripts/demo_drift.py      __main__ guard · reference batch @700 vs current batch @ the knob</text>
+<text class="m85" x="692" y="992">MANUAL entry point — drift_report() drives drift_check.py's drift_metrics()/evaluate_alarms(); POST /drift wraps it</text>
+
+<!-- demo_drift imports the monitor: code reuse, not invocation -->
+<line class="eo" x1="678" y1="971" x2="664" y2="971" marker-end="url(#mo)"/>
+
+<text class="sans sub grey" x="28" y="1026" style="font-weight:700">NOT WIRED INTO THE FLOW — THREE manual entry points; nothing (no CI, cron, or scheduler) invokes any of them automatically</text>
 
 <!-- ======================= footer ======================= -->
-<text class="m85" x="24" y="1058">sources read: pipelines/training_flow.py · pipelines/drift_check.py · src/{data_loader, data_validation, leakage_check, train, model_io, calibrate, evaluate, fairness, explain}.py · README.md — re-traced 2026-07-11 (Phase 2 split); labels cite symbols</text>
+<text class="m85" x="24" y="1060">sources read: pipelines/{training_flow, drift_check}.py · src/{data_loader, data_validation, leakage_check, train, model_io, calibrate, evaluate, fairness, explain}.py</text>
+<text class="m85" x="24" y="1074">scripts/{demo_drift, audit_fairness}.py · serving/{artifacts, fairness}.py · README.md — re-traced 2026-07-13 (orphan + artifact rows completed); labels cite symbols</text>
 </svg>
 </div>
 

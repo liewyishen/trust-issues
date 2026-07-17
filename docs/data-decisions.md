@@ -1456,3 +1456,129 @@ value changes. This entry adds no collected item, so the count stays 302.
 **TODO:** none. The next blast-radius sweep should search for the SITES that quote a
 governed quantity, not for the values currently believed wrong -- start from `_SITES` and
 `_PER_FILE_PATTERN` and ask what is missing from them, not from a grep of what is broken.
+
+---
+
+## `serving/` reaches 59 third-party packages and tolerates 26 that the image does not install -- `matplotlib` was never the edge case, it was the only one priced
+
+**Date:** 2026-07-17.
+
+**Context.** This file's entry *"Why 'serving never reaches `matplotlib`' was false, and
+why grep could not catch it"* is **true, and this entry does not correct it**. It asks
+whether serving's import graph reaches four packages -- `mlflow`, `metaflow`, `seaborn`,
+`matplotlib` -- and answers correctly: three never reached, one reached and tolerated.
+Every word of that holds. What it did not do, and did not claim to do, is ask the general
+question. Nobody did, for five months. This entry is that question, measured.
+
+**The graph, from the interpreter and not from an estimate.** A fresh process, `import
+serving.app`, `sys.modules` minus stdlib and first-party:
+
+    3012 modules
+    59 third-party top-level packages
+    10 of pyproject.toml's 11 declared dependencies reached
+    49 undeclared transitives
+
+`uvicorn` is the eleventh, and it is absent for a good reason: it is the CMD, not an
+import -- `serving.app` is what it loads, so it cannot be in `serving.app`'s own graph.
+
+**26 of the 59 are in the graph and not in the image.** They are reached locally, where
+`uv sync` installs the `dev` and `training` groups by default, and are absent from
+`uv export --frozen --no-dev --no-group training`. Blocking all 26 at once with a
+`MetaPathFinder` -- the image's import conditions, simulated -- and importing:
+
+    import serving.app: OK  (51 third-party tops remaining)
+
+**All 26 are reached-and-tolerated. The image is correct and has been all along.**
+
+**Where they come from**, traced by hooking `builtins.__import__`:
+
+    IPython      <- serving/app.py -> serving/artifacts.py -> src/explain.py -> shap
+    numba        <- the same path
+    yaml         <- shap -> numba
+    matplotlib   <- serving/app.py -> serving/artifacts.py -> lightgbm
+    PIL          <- lightgbm -> matplotlib
+    defusedxml   <- matplotlib -> PIL
+    psutil       <- lightgbm -> sklearn -> joblib
+    pyarrow      <- serving/app.py -> pandas
+
+`shap` drags in the whole of IPython: `jedi`, `parso`, `prompt_toolkit`, `pygments`,
+`traitlets`, `asttokens`, `executing`, `stack_data`, `pure_eval`, `wcwidth`. A REPL's
+dependency tree is in the import graph of a loan-scoring service, and no document in this
+repo mentions it.
+
+**The finding.** `matplotlib` is not the decisive edge case it reads as. **It is one of
+26, and it is the only one that was priced.** `tests/test_serving.py` spends seventeen
+lines explaining why `scripts` is in the graph legitimately. Not one line anywhere
+explains why `IPython` is. The image has been right for months and the reason was never
+written down -- which is this repo's own thesis pointed at itself: *the decision was right
+and the justification was untrue* is the failure mode, and *the decision was right and the
+justification was absent* is the same failure with less to argue with.
+
+**The fifth blind spot, as the general form of the four before it.** The rule this file
+set -- *don't grep, inspect `sys.modules`* -- was obeyed. It was then used to check
+**four names**. The right instrument, pointed at an enumeration:
+
+    grep                  -> sys.modules      matplotlib was reached; grep said clean
+    stale-value grep      -> registry         0.734: only already-wrong sites are findable
+    six-name blocklist    -> the property     openai is invisible; it does not exist yet
+    sys.modules           -> the socket       MLflow's telemetry, where sys.modules ALSO
+                                              passes it: test_training_flow.py imports
+                                              mlflow and sends nothing. Telemetry fires on
+                                              USE, not import (e8bc315).
+    sys.modules, correctly, on a list of four -> this entry
+
+Each time the instrument was upgraded and the *scope* was not. An enumeration is a damage
+inventory of what has already gone wrong -- the same shape as the entry above this one,
+one layer down the stack.
+
+**The conflation, recorded here because `6764375` fixes its text but this is where the
+reasoning lives.** `tests/test_serving.py`'s comment justified the import-graph roster
+with the image being 937MB instead of 2.64GB. Those are two properties:
+
+- **What loads at boot** -- `import serving.app`'s graph. Decides whether the container
+  dies on startup. This is what the roster measures.
+- **What the image installs** -- `uv sync --frozen --no-dev --no-group training`, plus
+  the `COPY` lines and `apt-get install`. Decides the 937MB. The roster does not bound
+  it.
+
+Ways `serving/` can grow heavier that **no import-graph assertion can structurally see**:
+
+1. **A handler-scope import.** `/drift`'s own pattern (`serving/app.py`'s handler-level
+   `from scripts.demo_drift import drift_report`), built on purpose.
+2. **A declared-but-unimported dependency.** `uv sync` installs what `pyproject.toml`
+   declares; the graph only sees what is imported.
+3. **A package gaining weight under the same import name.** Same graph, larger image.
+4. **`apt-get install`.** `libgomp1` today.
+5. **A larger `models/` COPY.**
+
+**(2) is the sharpest, and it is the one that matters next.** `openai` in
+`pyproject.toml`, imported inside a route handler: the image grows 5-10 MB and the import
+graph is byte-identical. An allowlist over the graph -- the obvious inversion of the
+roster -- would be **green on exactly the design it would be built to police**. That,
+plus two other findings, is why no allowlist was built: a top-level allowlist can only
+ban `scripts` (breaking the `find_spec` probe those seventeen lines defend) or admit it
+(letting `scripts.demo_drift` back in), and its exception set would have to contain
+`81d243bd2c585b0f4821__mypyc` -- a compiled artifact of `charset-normalizer` whose name
+carries a build hash, so the list would expire when a dependency is **rebuilt**, not
+upgraded.
+
+**Disposition:** documentation only. No code, no `src/`, no `serving/`, no
+`pyproject.toml`, no test, no threshold, no metric value. **The image is unchanged and was
+already correct.** This entry buys the reason, not the outcome -- the same trade as the
+`matplotlib` entry it generalizes, and made for the same reason that entry gives: the
+conclusion is a fact about one day, the method is what stops the next person re-deriving
+the false claim the same way. It adds no collected item, so the count stays 302.
+
+**TODO:** one, and it is real rather than tidy. The tolerance of all 26 is a property of
+**third-party** code -- `lightgbm` wraps its `matplotlib` import in `try`/`except
+ImportError`, and something equivalent must hold for `shap`/`IPython` or the image could
+not boot. That tolerance was verified here at today's pinned versions and **nothing
+watches it**. Any upgrade can turn a guarded import into an unguarded one, and the failure
+would appear as a container that dies at boot -- in a repo with no CI, no scheduler and no
+automated `docker build` (`docs/design.md` §4), that means it appears in front of whoever
+runs the image next. The check is cheap and, unlike the rejected allowlist, **derivable
+rather than hand-maintained**: the set is `graph - (uv export --no-dev --no-group
+training)`, both sides computable, and the assertion is `import serving.app` under a
+`MetaPathFinder` that blocks them -- a boot simulation, not a leanness claim. Whether that
+is worth building is a decision nobody has made, and this entry does not make it. It is
+recorded so that the decision is available rather than forgotten.

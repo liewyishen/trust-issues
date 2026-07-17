@@ -1043,9 +1043,37 @@ def test_drift_is_absent_not_broken_when_the_demo_is_not_mounted(bundle):
 
 # ---------------------------------------------------------------------------
 # 17. The serving import graph. pyproject.toml claims mlflow, metaflow and
-#     seaborn "never appear in sys.modules after `import serving.app`" -- that
-#     claim is why the Dockerfile can pass --no-group training and why the image
-#     is ~937MB instead of ~2.6GB. Nothing enforced it.
+#     seaborn "never appear in sys.modules after `import serving.app`". Nothing
+#     enforced it. This does.
+#
+#     WHAT THIS IS: a regression roster. Six names, each one a real leak that
+#     really happened, kept so it cannot happen twice --
+#
+#         mlflow, metaflow, seaborn  the training group (341418f, 79572b1)
+#         pipelines, scripts.demo_drift  /drift's handler import
+#         src.fairness               GET /fairness
+#
+#     WHAT THIS IS NOT: a bound on the image. An earlier version of this comment
+#     said the sys.modules claim "is why the image is ~937MB instead of ~2.6GB."
+#     That conflates two properties. The image's size is decided by what
+#     `uv sync --frozen --no-dev --no-group training` INSTALLS (Dockerfile) and
+#     what the COPY lines put in it. This test measures what `import serving.app`
+#     LOADS. The second is why the container does not die at boot; the first is
+#     why it is 937MB. Both are real, they are not the same, and this test bounds
+#     only the second.
+#
+#     That distinction is not pedantry -- it is the gap, and it is the one that
+#     matters next. A dependency can be DECLARED in pyproject.toml and imported
+#     only inside a route handler: `uv sync` installs it, the image grows, and
+#     this graph does not move by a single byte. That is not a hypothetical, it
+#     is /drift's own pattern (serving/app.py's handler-level import), built on
+#     purpose and defended below. So this test is structurally blind to that
+#     shape -- BY DESIGN, and it is not a defect in the test. It is the reason
+#     the test's name is what it is: no TRAINING DEPENDENCY, not "serving stays
+#     lean." Anyone reading it as the latter is reading the comment, not the
+#     assertion. Two of us did. See docs/data-decisions.md's entry on the 26
+#     reached-and-tolerated packages for what that misreading cost and what the
+#     graph actually contains.
 #
 #     /drift is the first route whose machinery lives on the far side of that
 #     line (scripts/demo_drift.py -> pipelines/drift_check.py -> mlflow, and

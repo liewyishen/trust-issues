@@ -1362,3 +1362,97 @@ decision, no metric value changes -- verified by parsing `HEAD`'s and the workin
 **TODO:** none. If the model is retrained, re-run `uv run python
 scripts/audit_fairness.py`; `tests/test_docs_fairness.py` then goes red for every doc
 still quoting the old ratios, which is the intended behaviour, not a nuisance.
+
+---
+
+## A blast radius grepped for stale values is a damage inventory, not an exposure inventory -- and the safer site is the one you find first
+
+**Date:** 2026-07-17.
+
+**Context.** The `0.734-0.745` drift was found by grepping `0.734|0.745|0.988|0.990`
+across the repo. That sweep reported a blast radius and the radius was acted on: nine
+sites, six of them stale, all fixed by `2efb632` and pinned by `e9b1286`. Two more sites
+quoting the same finding were found only afterwards, one per subsequent commit
+(`3f0c12a`, `4b0bc27`). This entry is not a correction of the roster -- `_SITES` is the
+roster's source of truth and `ea88407` stands as written. It records why the sweep could
+not have found them, because that reason generalises and currently exists only inside a
+commit message. `6e759b8` is this repo's proof of what happens to a rule that lives only
+there.
+
+**1. A search for stale values can only find sites that are already wrong.** The pattern
+`0.734|0.745|0.988|0.990` is a list of the values known to be bad. It matches a site if
+and only if that site is already broken. Both misses were **correct at the time**:
+
+    .gitignore:46      "recovering 0.74 -> 0.99"                    (2 dp, true)
+    README.md:341      "(94 of them in `tests/test_serving.py`)"    (exact, true)
+
+Neither contains any of the four patterns, so neither could be seen, no matter how
+carefully the output was read. The sweep was **complete as a damage inventory and
+incomplete as an exposure inventory**, and those are different documents answering
+different questions -- "what is broken?" versus "what is unbound?". A search finds only
+what it already knows to look for; the sweep knew the stale values, so it found staleness,
+and staleness was never the property that mattered.
+
+The corollary was stated in `3f0c12a`'s message and is quoted here rather than restated,
+because that commit is its source:
+
+> A registry's job is not to catch what has drifted. It is to bind everything that could.
+
+**2. Risk is inversely correlated with how conspicuous an unroped site is.** Of the two
+that hid, the one found first was the **safer** one:
+
+    .gitignore:46   0.74 / 0.99, 2 dp     rounding slack -- survives drift in the 3rd decimal
+    README.md:341   94, exact integer     zero buffer -- one added test and it is wrong
+
+`94` had no rounding to absorb anything, and `tests/test_serving.py` is the file the next
+phase of this project modifies. The site that looked most harmless -- a parenthetical
+aside about a test count, not a fairness ratio at all -- was the closest to breaking. It
+was found last precisely because nothing about it drew attention. Conspicuousness is not
+evidence of risk, and the two are anti-correlated often enough to plan around.
+
+**3. A guard written against an already-correct site must be proven to fail before it is
+believed.** `e9b1286` was committed RED against six real sites; its bite was never in
+question. `4b0bc27`'s per-file pin
+(`test_readme_per_file_counts_match_the_live_collection`) had no bug to redden it -- `94`
+was correct -- so it passed on arrival, which is exactly the condition under which a guard
+can be decoration and look identical to a guard that works.
+
+So one was manufactured. `README.md:341`'s `94` was changed to `95`, nothing else touched,
+and the full suite run: **1 failed, 301 passed** -- that test and only that test.
+Reverted; green at 302. **A guard that passes and a guard that bites are not the same
+thing**, and for a guard born green the difference is not observable without doing this.
+The general rule: if a pin is written against a site that is already right, mutate the
+site and watch it fail, or the pin is untested code asserting nothing.
+
+**4. The pin binds the shape, not the instance.** `_PER_FILE_PATTERN` in
+`tests/test_readme.py` matches `(N of them in `tests/<file>`)` generically, not the
+`test_serving.py` row that prompted it, and resolves each claim against
+`item.nodeid.split("::")[0]` on the live collection. A future
+`36 of them in tests/test_explain.py` is roped the moment it is written, by a test nobody
+remembers to update. Binding only the number that happens to exist today is the same error
+this arc exists to fix -- one level up.
+
+**Where the boundary between the two guards sits, and why.** They are split by SOURCE,
+not by file: `tests/test_docs_fairness.py` pins to `models/fairness_audit.json`;
+`tests/test_readme.py` pins to the live pytest collection. `94`'s true source is
+`len(collect from tests/test_serving.py)` -- a collection fact -- so it went to
+`test_readme.py` even though it lives in the same README line as a number the fairness
+registry watches. The artifact has no test-count key; expressing `94` in the fairness
+registry would have required inventing one.
+
+**The exemption is load-bearing here for the first time.** This entry quotes `0.734` and
+`0.74 / 0.99` in prose, and it can only do that because this file is exempt from
+`_SITES` -- `_SPREAD` would fire on `0.734-0.745` above and redden the guard permanently
+otherwise. That is not a loophole being exploited. It is the trade the exemption rule
+names: *files that record history are exempt; files that describe the current system are
+not.* An append-only log's right to hold superseded numbers is precisely what lets the
+guard be strict everywhere else, because the history has somewhere to live that is not a
+docstring. A repo with no exempt file either cannot write this entry or must weaken the
+rule for every file to accommodate it.
+
+**Disposition:** documentation only. No code, no `src/`, no test, no threshold, no metric
+value changes. This entry adds no collected item, so the count stays 302.
+
+**TODO:** none. The next blast-radius sweep should search for the SITES that quote a
+governed quantity, not for the values currently believed wrong -- start from `_SITES` and
+`_PER_FILE_PATTERN` and ask what is missing from them, not from a grep of what is broken.

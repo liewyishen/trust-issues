@@ -146,9 +146,17 @@ export function ApplicationForm({
               )}
             </div>
             <FieldError msg={err("applicant_id")} />
+            {/* Ends at the credit report on purpose. This sentence used to add "so a
+                demo can be reproduced exactly" -- a claim about the whole page, and one
+                no single test holds: it is INFERRED from /score's determinism
+                (tests/test_serving.py's test_same_applicant_id_scores_reproducibly_
+                through_http), /drift's (test_the_same_knob_setting_returns_the_same_
+                numbers), and /calibrator and /fairness being static reads. True, and
+                borrowed. What is left is what tests/test_bureau.py's
+                test_same_applicant_produces_same_report asserts, and nothing further. */}
             <p className="text-[11px] leading-relaxed text-faint">
               The bureau is deterministic — the <em>same</em> applicant id always returns the
-              same credit report, so a demo can be reproduced exactly.
+              same credit report.
             </p>
           </div>
 

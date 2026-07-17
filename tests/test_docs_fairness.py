@@ -153,6 +153,14 @@ class Site(NamedTuple):
     precision: int
 
 
+# This table deliberately EXCLUDES this file. The module docstring above quotes
+# 0.734/0.990 and the ~0.734-0.745 spread verbatim, because explaining why the
+# guard exists requires naming what it caught -- the exemption rule's "records
+# history" clause, applied to the file that states the rule. Registering it
+# would make _SPREAD fire on that docstring and redden the guard forever. A
+# convention, not an assertion; written down here so it stops being merely a
+# convention, and can be applied against whoever tries.
+#
 # A registry, not a grep. Free-grepping floats across prose would hit uv.lock's
 # upload timestamps, the ~0.4s bureau latency, Brier scores and the AUC pair --
 # so every site is named, bracketed, and says which artifact keys it owes.

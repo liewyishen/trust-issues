@@ -21,6 +21,15 @@ Partial runs, handled: `pytest -k`, `-m`, `--lf/--ff`, `--deselect`, or an
 explicit file / nodeid collect a deliberate subset, so len(session.items) is
 not the full suite and there is nothing to compare against. Those SKIP rather
 than fail -- a narrowed run must never turn a green badge red.
+
+The total is not the only collection fact the README states. Line 341 also
+claims a PER-FILE count -- "(94 of them in `tests/test_serving.py`)" -- which
+none of _COUNT_PATTERNS matches, so nothing pinned it until
+test_readme_per_file_counts_match_the_live_collection below. It is the worse
+exposure of the two: the total is watched by four sites and a badge everyone
+looks at, while a per-file number moves only when ONE file grows, and it is an
+exact integer with no rounding slack to absorb a drift. Both now read off the
+same live collection, because both are the same kind of fact.
 """
 
 from __future__ import annotations
@@ -52,6 +61,26 @@ def _readme_counts() -> list[tuple[int, str]]:
         for pattern in _COUNT_PATTERNS:
             for match in re.finditer(pattern, line):
                 found.append((int(match.group(1)), f"README.md:{lineno}: {line.strip()}"))
+    return found
+
+
+# Generic on purpose: every "(N of them in `tests/<file>`)" claim is bound, not
+# just test_serving.py's -- the one that happens to exist today. Binding only
+# the number currently written is how .gitignore:46 stayed invisible through a
+# blast-radius sweep: that sweep searched for the values already known to be
+# wrong, so a correct-but-unpinned claim matched nothing. A registry's job is
+# not to catch what has drifted; it is to bind everything that could.
+_PER_FILE_PATTERN = r"\((\d+) of them in `(tests/[\w./]+\.py)`\)"
+
+
+def _readme_per_file_counts() -> list[tuple[int, str, str]]:
+    """Every per-file count claim in README.md: (count, file, where)."""
+    found: list[tuple[int, str, str]] = []
+    for lineno, line in enumerate(README.read_text().splitlines(), start=1):
+        for match in re.finditer(_PER_FILE_PATTERN, line):
+            found.append(
+                (int(match.group(1)), match.group(2), f"README.md:{lineno}: {line.strip()}")
+            )
     return found
 
 
@@ -88,5 +117,38 @@ def test_readme_test_count_matches_the_live_collection(request):
     assert not stale, (
         f"README states a test count that no longer matches the suite "
         f"(collected {collected}). Update these and the badge together:\n  "
+        + "\n  ".join(stale)
+    )
+
+
+def test_readme_per_file_counts_match_the_live_collection(request):
+    if _run_is_narrowed(request.config):
+        pytest.skip(
+            "narrowed run; a per-file count is verifiable only against the full suite"
+        )
+
+    claims = _readme_per_file_counts()
+    assert claims, (
+        "no per-file count claim found in README.md -- if the "
+        "'(N of them in `tests/...`)' phrasing was dropped, drop this test with it"
+    )
+
+    # nodeid is "tests/test_serving.py::test_x[param]" -- rootdir-relative, and
+    # the same string the README writes. One entry per parametrized case, which
+    # is what "N of them" counts.
+    live: dict[str, int] = {}
+    for item in request.session.items:
+        live[item.nodeid.split("::")[0]] = live.get(item.nodeid.split("::")[0], 0) + 1
+
+    stale = []
+    for claimed, path, where in claims:
+        actual = live.get(path)
+        if actual is None:
+            stale.append(f"{where}\n      -> {path} collected nothing -- is the path right?")
+        elif actual != claimed:
+            stale.append(f"{where}\n      -> {path} actually has {actual}")
+
+    assert not stale, (
+        "README states a per-file test count that no longer matches the suite:\n  "
         + "\n  ".join(stale)
     )

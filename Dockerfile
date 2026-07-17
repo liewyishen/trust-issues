@@ -36,10 +36,22 @@ WORKDIR /app
 # --no-install-project: this repo declares no build backend; it is imported off
 # PYTHONPATH, not installed as a distribution.
 # --no-group training: mlflow/metaflow/matplotlib/seaborn are training/notebook
-# dependencies serving's import graph never reaches (see pyproject.toml's
-# dependencies comment for the verified per-package rationale) -- excluding
-# them here is the entire point of the [dependency-groups] split. --no-dev
-# drops pytest/jupyter/ipykernel, as before.
+# dependencies. THREE of the four are never reached -- mlflow, metaflow and
+# seaborn are absent from sys.modules after `import serving.app`. matplotlib IS
+# reached: serving/artifacts.py imports lightgbm, and lightgbm's compat module
+# imports matplotlib on the way in. Excluding it is still correct, because that
+# import is guarded (try/except ImportError -> MATPLOTLIB_INSTALLED = False), so
+# lightgbm degrades to no-plotting instead of failing. Reached and TOLERATED,
+# not unreached -- and the two are not the same sentence. This comment used to
+# say "never reaches" of all four while citing pyproject.toml for the rationale,
+# which says the opposite: a reader following the pointer found the two
+# disagreeing, with this file -- the one that actually builds the image --
+# holding the false one. tests/test_serving.py's _TOLERATED is the first place
+# that tolerance executes rather than narrates; it is the citation to trust.
+# Excluding this group is the entire point of the [dependency-groups] split, and
+# what makes the image ~937MB: this flag decides what INSTALLS. The import graph
+# decides something else -- whether skipping the group is safe rather than fatal
+# at boot. --no-dev drops pytest/jupyter/ipykernel, as before.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-group training --no-install-project
 

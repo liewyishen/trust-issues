@@ -221,10 +221,13 @@ The two exclusions have *different* reasons, and the difference is the whole des
   the slim image does not copy and whose `mlflow` / `metaflow` dependencies it does not install
   (`uv sync --no-group training`). The route is mounted behind a `find_spec` probe
   (`serving/app.py`'s `DRIFT_DEMO_AVAILABLE`) and the handler imports the monitor *inside* the
-  function — importing it at module scope would drag `mlflow` + `metaflow` into `serving.app`'s
-  import graph and undo the 2.64GB → 937MB cut. In the container the route is simply not there, and
-  a client gets an **honest 404**. A test asserts the line holds: `import serving.app` pulls in no
-  `mlflow`, no `metaflow`, no `pipelines`, no `src.fairness`.
+  function — importing it at module scope would **kill the container at boot**, on `import
+  serving.app`, before a single request (`serving/app.py:70` says it exactly). It would not make
+  the image bigger: `pipelines/` is not in the image to import and `mlflow` is not installed, so
+  the container is still 937MB — it just does not run. **The graph decides whether skipping the
+  training group is safe; `uv sync --no-group training` decides the size.** In the container the
+  route is simply not there, and a client gets an **honest 404**. A test asserts the line holds:
+  `import serving.app` pulls in no `mlflow`, no `metaflow`, no `pipelines`, no `src.fairness`.
 - **`/fairness` is a frozen artifact because the data may not ship.** `run_fairness_audit()` needs
   the 167 MB assessment CSV — the *first line* of `.dockerignore`, because the brief forbids
   redistributing it — and ~40 s to retrain both ablation variants. That is not a size trade-off we

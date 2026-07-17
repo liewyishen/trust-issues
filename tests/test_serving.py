@@ -78,8 +78,10 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import json
+import re
 import subprocess
 import sys
+import tomllib
 from datetime import datetime
 from pathlib import Path
 
@@ -1091,6 +1093,42 @@ def test_drift_is_absent_not_broken_when_the_demo_is_not_mounted(bundle):
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _training_group() -> frozenset[str]:
+    """The training group, DERIVED from pyproject.toml -- never transcribed.
+
+    This function exists because the transcription was wrong and stayed wrong.
+    The watched list used to be a literal tuple carrying three of this group's
+    four members. The fourth, matplotlib, was the one that leaks -- so the test
+    named "pulls in no training dependency" passed while a training dependency
+    was in sys.modules. A hand-copied set cannot go stale loudly: it is only as
+    honest as the day someone typed it, and nothing tells you the day it stopped
+    being true. Reading the group is what makes the name checkable at all.
+
+    Same move as tests/test_readme.py pinning the live collected count instead of
+    a literal, one layer over: iterate the definition, do not restate it.
+
+    Distribution name == module name for all four of today's members. That
+    coincidence is doing real work here and it is not guaranteed in general
+    (scikit-learn imports as sklearn). If a future member breaks it, this watches
+    a name that can never appear and passes vacuously -- the failure would be
+    silent, which is the same shape of defect this function was written to kill.
+    Left underived on purpose: the fix is importlib.metadata.packages_distributions(),
+    which answers only for INSTALLED packages, so it would make the guard depend
+    on the environment it runs in. Noted, not built.
+    """
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as fh:
+        requirements = tomllib.load(fh)["dependency-groups"]["training"]
+    return frozenset(re.split(r"[<>=!~\[; ]", req)[0].strip() for req in requirements)
+
+
+# The first-party three are transcribed and stay transcribed: `pipelines`,
+# `src.fairness` and `scripts.demo_drift` are import paths in this repo, not
+# entries in a dependency table. There is no definition to iterate -- the
+# directory listing is not one, since watching every first-party package would
+# watch `src` and `serving` themselves. Each is here because it leaked once.
+_FIRST_PARTY_LEAKS = frozenset({"pipelines", "src.fairness", "scripts.demo_drift"})
+
+
 def test_importing_serving_app_pulls_in_no_training_dependency():
     # src.fairness and scripts.demo_drift join the list with GET /fairness.
     # serving/fairness.py is a JSON reader and a string comparison; it must
@@ -1108,11 +1146,10 @@ def test_importing_serving_app_pulls_in_no_training_dependency():
     # would fail on a fact about how find_spec works rather than on a dependency
     # leak, and the only way to make it pass would be to delete the honest
     # find_spec probe that keeps /drift out of the image.
+    watched = tuple(sorted(_training_group() | _FIRST_PARTY_LEAKS))
     probe = (
         "import sys; import serving.app; "
-        "print(','.join(m for m in ('mlflow', 'metaflow', 'seaborn', 'pipelines', "
-        "'src.fairness', 'scripts.demo_drift') "
-        "if m in sys.modules))"
+        f"print(','.join(m for m in {watched!r} if m in sys.modules))"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe],

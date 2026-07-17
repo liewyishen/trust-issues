@@ -1128,8 +1128,68 @@ def _training_group() -> frozenset[str]:
 # watch `src` and `serving` themselves. Each is here because it leaked once.
 _FIRST_PARTY_LEAKS = frozenset({"pipelines", "src.fairness", "scripts.demo_drift"})
 
+# THE EXCEPTION, WRITTEN WHERE IT RUNS.
+#
+# matplotlib is in the training group AND in serving's import graph. Both facts
+# are true, and together they are not a contradiction -- they are a tolerance:
+#
+#     serving/app.py -> serving/artifacts.py -> lightgbm -> lightgbm.compat
+#     lightgbm.compat:  try: import matplotlib / except ImportError:
+#                       MATPLOTLIB_INSTALLED = False   (degrades to no plotting)
+#
+# So serving REACHES matplotlib here, where the training group is installed, and
+# TOLERATES its absence in the image, where it is not. lightgbm runs either way,
+# and nothing on the scoring path plots. Reached and tolerated -- not unreached.
+# That is why matplotlib stays out of [project] dependencies while mlflow,
+# metaflow and seaborn stay out of the graph entirely: a different reason for the
+# same shelf.
+#
+# This is the FIRST TIME that exception exists anywhere that executes. It was
+# already written in prose five times over, in four files, and not one of them
+# runs: pyproject.toml:28-34 and again at :79-84, docs/design.md's serving-layer
+# section, docs/data-decisions.md's "Why 'serving never reaches matplotlib' was
+# false" entry, and README.md's serving-layer section. All five are correct. All
+# five are narration. The transcription this replaces was green for exactly as
+# long as the tolerance lived only in prose, because prose cannot be the thing a
+# subprocess disagrees with.
+#
+# Hand-written on purpose, and it cannot be derived: "which imports does lightgbm
+# wrap in try/except" is a fact about lightgbm's source, not a row in any table
+# this repo owns. A decision, not a definition. So it gets the treatment a
+# transcription cannot have -- it is checked for staleness below. If matplotlib
+# ever stops being reached (lightgbm drops the import, or artifacts.py stops
+# importing lightgbm), this set is a lie about a package nobody pulls, and the
+# test says so instead of quietly excusing a name that is no longer there. An
+# exception that cannot expire is how the last one survived being wrong.
+_TOLERATED = frozenset({"matplotlib"})
 
-def test_importing_serving_app_pulls_in_no_training_dependency():
+
+def test_importing_serving_app_pulls_in_no_untolerated_training_dependency():
+    """`untolerated` is in the name because the old name was false.
+
+    It read "pulls in no training dependency" while matplotlib -- a training
+    dependency by this test's OWN derived definition of the term, read live out
+    of [dependency-groups] training -- sat in sys.modules, and the test was
+    green. "No X" is a universal, matplotlib was a counterexample, and declaring
+    the exception in _TOLERATED does not make the universal true. It makes the
+    BODY honest. The name has to say what the body checks, and the body checks
+    `present - _TOLERATED`.
+
+    The charitable reading -- "training dependency" means "a package serving
+    actually needs the training group for," which matplotlib is not -- is
+    available, and it is how the name survived a review that was hunting for
+    exactly this. It does not survive the derivation. Once the test reads the
+    group instead of remembering it, the group's members are what the name is
+    quantified over, and matplotlib is in it.
+
+    Same fix as 88301a1's `_in_one_process`: the assertion was right, the
+    quantifier reached past it, so the quantifier gets the qualifier. Ugly is
+    fine. False is not.
+
+    Under-claims on purpose: this also asserts _TOLERATED has not gone stale,
+    which the name does not mention. A name narrower than its body is safe --
+    it is the wide ones that lie.
+    """
     # src.fairness and scripts.demo_drift join the list with GET /fairness.
     # serving/fairness.py is a JSON reader and a string comparison; it must
     # never reach for the audit itself, which calls load_raw() and expects the
@@ -1146,7 +1206,8 @@ def test_importing_serving_app_pulls_in_no_training_dependency():
     # would fail on a fact about how find_spec works rather than on a dependency
     # leak, and the only way to make it pass would be to delete the honest
     # find_spec probe that keeps /drift out of the image.
-    watched = tuple(sorted(_training_group() | _FIRST_PARTY_LEAKS))
+    training = _training_group()
+    watched = tuple(sorted(training | _FIRST_PARTY_LEAKS))
     probe = (
         "import sys; import serving.app; "
         f"print(','.join(m for m in {watched!r} if m in sys.modules))"
@@ -1155,14 +1216,28 @@ def test_importing_serving_app_pulls_in_no_training_dependency():
         [sys.executable, "-c", probe],
         capture_output=True, text=True, cwd=PROJECT_ROOT, check=True,
     )
-    leaked = result.stdout.strip()
-    assert leaked == "", (
-        f"`import serving.app` now pulls in: {leaked}. Those are training-group "
-        "dependencies the serving image does not install (Dockerfile: uv sync "
-        "--no-group training) and, for pipelines/, does not even copy "
-        "(.dockerignore). The container would die at boot. If this broke because "
-        "a drift import moved to module scope, move it back into the handler "
-        "(serving/app.py)."
+    present = {m for m in result.stdout.strip().split(",") if m}
+
+    leaked = sorted(present - _TOLERATED)
+    assert leaked == [], (
+        f"`import serving.app` now pulls in: {', '.join(leaked)}. Those are "
+        "training-group dependencies the serving image does not install "
+        "(Dockerfile: uv sync --no-group training) and, for pipelines/, does not "
+        "even copy (.dockerignore). The container would die at boot. If this broke "
+        "because a drift import moved to module scope, move it back into the "
+        "handler (serving/app.py). If the import is genuinely guarded by a "
+        "try/except ImportError in third-party code -- the way lightgbm guards "
+        "matplotlib -- then it is tolerated, not leaked, and belongs in _TOLERATED "
+        "with the guard named. Prove the guard first; do not add it to keep this "
+        "green."
+    )
+
+    stale = sorted(_TOLERATED - present)
+    assert stale == [], (
+        f"_TOLERATED excuses {', '.join(stale)}, which `import serving.app` no "
+        "longer reaches. The tolerance is now a claim about a package nothing "
+        "pulls. Delete the entry -- an exception that outlives its reason is how "
+        "the transcription this test replaced stayed green while it was false."
     )
 
 

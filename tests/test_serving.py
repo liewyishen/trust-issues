@@ -62,10 +62,30 @@ HTTP boundary and of nothing beneath it:
      (which the knob does not touch) stays quiet in BOTH: the negative control
      is what makes the alarm mean something.
  17. `import serving.app` pulls in NO mlflow, NO metaflow and NO pipelines.
-     pyproject.toml has always CLAIMED this -- it is why the serving image can
-     skip the training dependency group and stay ~937MB -- and nothing enforced
-     it. /drift is the first route whose machinery lives behind that line, so
-     this is where the line gets a test.
+     pyproject.toml has always CLAIMED this and nothing enforced it; this is
+     where the line gets a test. matplotlib is the training group's fourth
+     member and it IS pulled in -- tolerated, not absent, because lightgbm wraps
+     the import in try/except (see _TOLERATED, section 17 below). Listing the
+     three without that sentence is how a true summary invites a false
+     inference.
+
+     What the graph buys is BOOT, not SIZE. It is why the container survives
+     `uv sync --no-group training` instead of dying at import. What makes the
+     image ~937MB is that same flag INSTALLING less, plus what the COPY lines
+     put in it. Two properties: this test bounds the first and says nothing
+     about the second. A dependency declared in pyproject.toml and imported
+     inside a route handler grows the image and leaves this graph byte-identical
+     -- /drift's own pattern, built on purpose.
+
+     An earlier version of this item made the graph the reason for the 937MB.
+     6764375 cut that exact conflation out of the block comment at section 17
+     and missed it here, one screen above, in a commit whose entire subject was
+     that conflation: the claim had two copies at two altitudes and we only saw
+     the one we were looking at. a42410e is the measurement that settles it --
+     26 packages are in the graph and NOT in the image, so the graph does not
+     bound the image in either direction.
+
+     /drift is the first route whose machinery lives behind that line.
 
 Plus, carried across the HTTP boundary from tests/test_explain.py: no
 probability-scale contribution leaks into the response.

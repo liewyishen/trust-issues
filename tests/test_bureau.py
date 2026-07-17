@@ -13,15 +13,22 @@ explain_applicants, or serving/app.py.
      that ScoreRequest no longer carries the field -- and provenance metadata
      cannot be blank or out-of-enum.
   2. MockBureau is deterministic: fetch(applicant_id) returns a
-     byte-identical report every call for the same applicant_id, and the
-     report it returns always satisfies CreditReport's own validation.
+     byte-identical report every call for the same applicant_id -- in one
+     process, across instances, and ACROSS PROCESSES -- and the report it
+     returns always satisfies CreditReport's own validation. The third is a
+     separate claim from the first two, needs a subprocess to see, and is the
+     one a reproducible demo actually rests on.
 
 Run:  pytest tests/test_bureau.py -v
 """
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -29,6 +36,14 @@ from pydantic import ValidationError
 from src.data_validation import DTI_MAX_REAL, DTI_SENTINEL, FICO_MAX, FICO_MIN
 
 from serving.bureau import CreditBureau, CreditReport, MockBureau
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+# Distinct from each other; their values are otherwise arbitrary. The assertion
+# is that they AGREE, so what matters is only that they differ -- and that they
+# are set explicitly, rather than trusting this interpreter's seed to differ
+# from a child's by luck.
+_HASH_SEEDS = ("0", "1", "12345")
 
 # One report that honors the full contract. Every mutation test below starts
 # from a copy of this, the same pattern GOOD (tests/test_serving.py) and
@@ -170,8 +185,13 @@ def test_mock_bureau_is_a_credit_bureau():
 
 
 # ---------------------------------------------------------------------------
-# 6. MockBureau is deterministic: same applicant_id -> identical report,
-#    every call, across separate MockBureau instances.
+# 6. MockBureau is deterministic: same applicant_id -> identical report, every
+#    call, across separate MockBureau instances, and across separate PROCESSES.
+#
+#    The third is not a stronger version of the first two. It is a different
+#    claim, it is the one MockBureau.fetch's own comment calls "exactly the
+#    failure mode determinism exists to rule out", and until
+#    test_determinism_holds_across_separate_processes below, nothing asserted it.
 # ---------------------------------------------------------------------------
 def test_same_applicant_produces_same_report():
     bureau = MockBureau()
@@ -180,11 +200,95 @@ def test_same_applicant_produces_same_report():
     assert first == second
 
 
-def test_determinism_holds_across_separate_bureau_instances():
-    """No hidden per-instance state -- two fresh MockBureau()s agree too."""
+def test_determinism_holds_across_separate_bureau_instances_in_one_process():
+    """No hidden per-instance state -- two fresh MockBureau()s agree too.
+
+    `in_one_process` is in the name because that is the whole of what this
+    asserts. The old name -- test_determinism_holds_across_separate_bureau_
+    instances -- read as if "separate" reached further than it does, and it does
+    not: both instances live in this interpreter, under this interpreter's one
+    PYTHONHASHSEED. The cross-process claim is a different test, immediately
+    below, and nothing here implies it. Renamed, not reassigned: the assertion
+    is byte-for-byte the one it always made.
+    """
     first = MockBureau().fetch("applicant-0001")
     second = MockBureau().fetch("applicant-0001")
     assert first == second
+
+
+def test_determinism_holds_across_separate_processes():
+    """A report must not depend on which interpreter asked for it.
+
+    THE PROPERTY. "The same applicant id always returns the same credit report"
+    is not a claim about one run. A demo reproduced tomorrow, on another machine,
+    in CI, is a SECOND PROCESS -- so if the report only holds still within an
+    interpreter, the sentence the frontend shows the user is false in the only
+    situation anyone would check it. Reproducing across processes is not a
+    stronger form of determinism here; it is the form that means anything.
+
+    SHA-256 is HOW. MockBureau.fetch's own comment says why, and this test exists
+    to hold that decision rather than let its reasoning live in prose: Python's
+    built-in hash() is randomized per process (PYTHONHASHSEED), so seeding off it
+    would make the same applicant_id draw a different report in every new
+    interpreter -- "exactly the failure mode determinism exists to rule out", in
+    that comment's words. It was right, and nothing enforced it.
+
+    WHY A SUBPROCESS IS THE POINT. No same-process check can see this. Measured:
+    with hash() substituted for SHA-256, every other test in this section stays
+    green, because within one interpreter hash() IS stable. The bug is invisible
+    to any assertion that does not cross the process boundary.
+
+    Seeds are set EXPLICITLY, and there is more than one, so nothing rests on
+    this interpreter's own seed being anything in particular: the proof is that
+    the children AGREE WITH EACH OTHER. That they also agree with this process is
+    the second assertion, and it would fail on its own if the parent were the odd
+    one out.
+
+    On the socket guard (tests/conftest.py): measured, a child interpreter does
+    NOT inherit it, and spawning one records no violation -- subprocess uses
+    pipes, not sockets. So these children run outside that guard. That is safe
+    for a reason, not by luck: MockBureau performs no I/O, which is the property
+    the guard exists to protect and this test exists to depend on. The same gap
+    already applies to test_serving.py's import-graph subprocess.
+    """
+    _PROBE = (
+        "import sys; sys.path.insert(0, %r); "
+        "from serving.bureau import MockBureau; "
+        "print(MockBureau().fetch('applicant-0001').model_dump_json())"
+        % (str(PROJECT_ROOT),)
+    )
+
+    mine = MockBureau().fetch("applicant-0001").model_dump_json()
+
+    theirs: dict[str, str] = {}
+    for seed in _HASH_SEEDS:
+        result = subprocess.run(
+            [sys.executable, "-c", _PROBE],
+            capture_output=True, text=True, check=True,
+            cwd=PROJECT_ROOT, env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        theirs[seed] = result.stdout.strip()
+
+    assert len(set(theirs.values())) == 1, (
+        "MockBureau.fetch('applicant-0001') returned DIFFERENT reports under "
+        f"different PYTHONHASHSEEDs:\n"
+        + "\n".join(f"  PYTHONHASHSEED={s}: {r}" for s, r in theirs.items())
+        + "\n\nSomething on the path from applicant_id to the report is seeded "
+        "off Python's built-in hash(), which is randomized per process. The same "
+        "applicant now draws a different report in every new interpreter -- so a "
+        "demo cannot be reproduced tomorrow, and the frontend's sentence about "
+        "the bureau is false. See MockBureau.fetch: the draw must be seeded off "
+        "hashlib.sha256(applicant_id), never hash()."
+    )
+
+    assert set(theirs.values()) == {mine}, (
+        "Child interpreters agree with each other but not with this one:\n"
+        f"  this process : {mine}\n"
+        f"  children     : {next(iter(theirs.values()))}\n\n"
+        "The report depends on something that differs between this process and a "
+        "fresh one -- an env var, cwd, import order or module-level state -- "
+        "rather than on applicant_id alone."
+    )
 
 
 def test_different_applicants_produce_different_reports():

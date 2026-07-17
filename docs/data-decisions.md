@@ -1256,3 +1256,109 @@ value changes. Committed separately (`18daa36`) from everything that consumes it
 the `src/` diff can be reviewed in isolation.
 
 **TODO:** none.
+
+---
+
+## The MS EO spread `0.734-0.745` / `0.988-0.990` is superseded, and the guard that should have caught it now exists
+
+**Date:** 2026-07-17.
+
+**Superseded, and by what.** The Layer-3 spread this file recorded at lines 125-126 --
+Mississippi's good-applicant EO ratio "~0.734–0.745 with state included and ~0.988–0.990
+with state removed" -- is superseded by run `cca4c361` and by
+`models/fairness_audit.json`. The authoritative values are the table at line 1237, under
+"`audit_layer3_ablation()` returns the Test frames for both variants":
+
+    state   EO with state     95% CI              EO no state    95% CI
+    MS      0.7448            [0.7155, 0.7741]    0.9879         [0.9621, 1.0124]
+
+Lines 125-126 and 508 are **kept exactly as they are**, per this file's append-only rule
+and the precedent 6e759b8 set for the AUC. They record what was believed before an
+authoritative run existed. This entry is the pointer from here on.
+
+**What the spread actually was.** Not a bootstrap CI, not a threshold spread, not a typo:
+a spread across two different runs of the same quantity, both at threshold 0.22.
+`0.734`/`0.990` are the notebook's run (Cell 41, taken with `INCLUDE_ADDR_STATE = True`);
+`0.745`/`0.988` are `src/fairness.py`'s. Every endpoint is a real output of a real run.
+Neither pair was ever an interval.
+
+**Why it survived 8 days and three doc passes: 6e759b8 checked containment.** That commit
+read the authoritative AUC out of `cca4c361` at full precision and corrected
+`src/fairness.py`'s docstrings from 0.6689 to 0.6690. About the EO, in the same breath,
+it wrote: "MS's Layer-3 EO recovery is 0.744823 -> 0.987926, **inside** the 0.734-0.745 /
+0.988-0.990 spread this doc recorded earlier."
+
+It verified that the new point estimate fell inside the old spread, concluded the spread
+was therefore still true, and left it standing. One commit, two epochs: the AUC got a
+point estimate, the EO kept a spread -- in adjacent lines of the same docstring.
+`docs/design.md` was written 7h34m later and inherited exactly that split, citing
+`cca4c361` for the AUC and the pre-`cca4c361` spread for the EO, in one sentence.
+
+**Why containment was the wrong test.** A spread that happens to contain the point
+estimate is not a confidence interval. Both containments here are byproducts of the
+bootstrap being wide enough to swallow the older run:
+
+    0.734 in [0.7155, 0.7741]        0.990 in [0.9621, 1.0124]
+
+and the CIs those intervals come from did not exist until 2026-07-13, six days AFTER the
+spread was written. The containment is arithmetic, not derivation. Reporting the spread as
+though it were an interval launders a stale run into a statistical claim -- worse than a
+plainly wrong number, because it reads as evidence. It is the same credulity
+`audit_layer1()` bootstraps to refuse, committed by the documents describing the audit.
+
+**The structural fix, and why it went in first.** `tests/test_docs_fairness.py`
+(`e9b1286`) pins every current-system fairness number to `models/fairness_audit.json`: ten
+named sites, each bracketed by a prose-anchored region and declaring which artifact key
+paths it owes, at the precision it writes. A registry, not a free-grep over floats -- that
+would hit `uv.lock` timestamps, the ~0.4s bureau latency, Brier scores and the AUC pair.
+
+It was committed **RED**, failing on all six real sites, before one was edited.
+Hand-editing first and writing the guard after is precisely what 6e759b8 did. `2efb632`
+turned them green.
+
+It rejects the range FORM, not merely stale values. A site quoting `~0.734–0.745`
+satisfies a bare "does 0.745 appear?" check and goes green while saying something false --
+that is the loophole containment walked through. The next retrain reddens CI instead of
+shipping a stale claim.
+
+It answers only "does the doc say the number the artifact holds?", never "is that number
+good evidence?". `tests/test_serving.py`'s
+`test_the_ablation_is_the_evidence_the_readme_claims_it_is` answers the second, and
+correctly refuses to pin point estimates. Two questions, two files; merging them would
+re-commit the error the CIs were added to fix.
+
+**The exemption rule -- which files are ALLOWED to go stale.** Stated in a document here
+for the first time. Until now it lived only inside 6e759b8's message, as a remark about
+line 127. A rule a guard enforces but no document states is itself a say-equals-do hole.
+
+    Files that RECORD HISTORY are exempt.
+    Files that DESCRIBE THE CURRENT SYSTEM are not.
+
+- **This file is exempt.** Append-only. Superseded numbers stay standing as the record of
+  what was believed when; corrections are appended, never edited in. A guard that reddens
+  it is arguing with its design.
+- **`notebooks/analysis.ipynb` is exempt.** A with-state historical artifact. Its `0.734`
+  is that run's true output at `INCLUDE_ADDR_STATE = True` and is correct in context;
+  "fixing" it would make the notebook lie about its own run.
+- **Everything else quoting these numbers is not**, and is in the registry:
+  `docs/design.md`, `README.md` (x2), `frontend/README.md`, `src/fairness.py` (x2),
+  `src/features.py`, `tests/test_fairness.py` (x2), `frontend/src/lib/api.ts`.
+
+**Provenance, checked rather than assumed.** `design.md` now sources both the AUC and the
+EO from `cca4c361`, but the artifact is NOT that run's output file: it was generated
+2026-07-13 by `scripts/audit_fairness.py`, `cca4c361` ran 2026-07-09, and
+`model.trained_at` moved (07-09 -> 07-11) between them. They agree anyway, and
+deterministically -- `audit_layer3_ablation()` trains both variants itself at fixed
+`num_boost_round` with no early stopping and never reads the shipped model, so Layer 3
+does not depend on `model.trained_at` at all. `cca4c361` recorded `0.744823 -> 0.987926`
+and `auc_with_state = 0.6690306566920463`; the artifact holds `0.7448231090766632 ->
+0.9879261537678061` and that AUC at identical full double precision.
+
+**Disposition:** docs, docstrings and comments only. No scoring logic, no threshold, no
+decision, no metric value changes -- verified by parsing `HEAD`'s and the working tree's
+`src/fairness.py` and `src/features.py`, stripping every docstring node, and comparing
+`ast.dump()`: identical for both files.
+
+**TODO:** none. If the model is retrained, re-run `uv run python
+scripts/audit_fairness.py`; `tests/test_docs_fairness.py` then goes red for every doc
+still quoting the old ratios, which is the intended behaviour, not a nuisance.

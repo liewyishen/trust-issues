@@ -228,6 +228,10 @@ The two exclusions have *different* reasons, and the difference is the whole des
   training group is safe; `uv sync --no-group training` decides the size.** In the container the
   route is simply not there, and a client gets an **honest 404**. A test asserts the line holds:
   `import serving.app` pulls in no `mlflow`, no `metaflow`, no `pipelines`, no `src.fairness`.
+  The route's absence in the image was itself an assertion until 2026-07-17, when the image was
+  built once by hand and answered: `DRIFT_DEMO_AVAILABLE` is `False` in the container. That does
+  **not** make it guarded — no test reads the `Dockerfile`, and `88a8403` cut this very clause out
+  of a test's name for that reason. One hand-built image, one date, nothing re-checking it.
 - **`/fairness` is a frozen artifact because the data may not ship.** `run_fairness_audit()` needs
   the 167 MB assessment CSV — the *first line* of `.dockerignore`, because the brief forbids
   redistributing it — and ~40 s to retrain both ablation variants. That is not a size trade-off we
@@ -316,14 +320,43 @@ whether anything is deployed — see the paragraph above.
 
 Three of those four packages are genuinely unreachable from serving. `matplotlib` is not,
 and the same runtime check is what caught it: `mlflow`, `metaflow` and `seaborn` are absent
-from `sys.modules` after `import serving.app`, but `matplotlib` is *present* — `serving/`
-imports `lightgbm`, and LightGBM's compat module imports `matplotlib` on the way in.
-Excluding it from the image is still correct, because LightGBM wraps that import in
-`try` / `except ImportError` and degrades to no-plotting rather than failing. So the honest
-statement is that serving **tolerates** `matplotlib`'s absence, not that it never reaches
-it. The image is unchanged by this; only the sentence describing it is. Writing "never
-reaches any of the four" would have been the same class of untrue-but-flattering claim this
-project exists to catch, so it is written the long way instead.
+from `sys.modules` after `import serving.app` **in this repo**, but `matplotlib` is
+*present* — `serving/` imports `lightgbm`, and LightGBM's compat module imports
+`matplotlib` on the way in. Excluding it from the image is still correct, because LightGBM
+wraps that import in `try` / `except ImportError` and degrades to no-plotting rather than
+failing. So the honest statement is that serving **tolerates** `matplotlib`'s absence, not
+that it never reaches it. The image is unchanged by this; only the sentence describing it
+is. Writing "never reaches any of the four" would have been the same class of
+untrue-but-flattering claim this project exists to catch, so it is written the long way
+instead.
+
+That was measured **here**, where the `training` group is installed. The other half — the
+half that makes "tolerates" mean anything — was measured **there**, on 2026-07-17, by
+building the image and asking from inside it:
+
+```
+matplotlib in sys.modules              False    # it is True in this repo
+matplotlib installed at all            False
+lightgbm.compat.MATPLOTLIB_INSTALLED   False
+import serving.app                     OK       # the container does not die at boot
+image size                             936MB
+```
+
+`True` here and `False` there is not a contradiction — it is the reason the exclusion is
+safe. Reached in this repo, genuinely absent in the image. And `MATPLOTLIB_INSTALLED ==
+False` inside the shipped container is LightGBM's `try` / `except ImportError` **firing**,
+not us predicting that it would: the degradation this paragraph has always asserted is the
+one the container actually performs. `tests/test_serving.py`'s `_TOLERATED` is the first
+place that tolerance executes rather than narrates, and this is the measurement that makes
+it more than an assertion about somebody else's code.
+
+Read that as narrowly as it is written. **One image, one session, one manual `docker
+build`, on one date.** There is no CI in this repo. Nothing rebuilds the image on a
+schedule, nothing re-checks these five numbers, and **nothing will go red when one of them
+stops being true.** A measurement is not a guard, and a dated measurement described as
+though it were coverage is the failure this file's neighbours were written to catch. The
+936MB is that build; the **937MB** above is a different build, from Phase 2. Both were
+measured, nothing has reconciled them, and this sentence does not guess which is now right.
 
 ---
 

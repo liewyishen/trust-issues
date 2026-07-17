@@ -230,6 +230,25 @@ _SITES = (
         precision=3,
     ),
     Site(
+        # The `!models/fairness_audit.json` negation's justification: the audit's
+        # output is source-controlled BECAUSE this finding would otherwise exist
+        # only on whichever machine last ran it. Quotes both ratios at 2 dp.
+        #
+        # Missed by the original blast-radius sweep, which grepped
+        # 0.734|0.745|0.988|0.990 -- i.e. searched for the STALE values, and so
+        # could only find sites already wrong. This one was already right, and
+        # therefore invisible. A registry's job is not to catch what has
+        # drifted; it is to bind everything that could.
+        name=".gitignore/fairness_audit-negation-rationale",
+        path=".gitignore",
+        region=(
+            r"evidence behind this repo's loudest fairness claim"
+            r"(?s:.+?)nobody's authority"
+        ),
+        keys=_POINTS,
+        precision=2,
+    ),
+    Site(
         # The 409 docstring's worked example of a stale artifact. Quotes the
         # with-state point at 4 dp, the precision the JSON's own consumers use.
         name="frontend/src/lib/api.ts/stale-409-docstring",

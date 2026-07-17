@@ -43,12 +43,14 @@ sends nothing. The telemetry fires on USE -- `mlflow.create_experiment()` /
 graph, the tool this repo reaches for first, would have cleared this. Only the
 socket knew.
 
-So this guard is committed RED, on purpose, the same way
+So this guard was committed RED (e8bc315), on purpose, the same way
 tests/test_docs_fairness.py was: a red test committed deliberately is the record
-that the bug was real. Silencing the telemetry is a separate commit, because the
-reason it is silenced (MLflow chose to phone home; we chose not to) is a
-different fact from the reason the property is guarded, and mixing them would
-leave neither on the record.
+that the bug was real. The telemetry is silenced in the commit AFTER it, not the
+same one -- the reason it is silenced (MLflow chose to phone home; this repo
+chose not to) is a different fact from the reason the property is guarded, and
+one commit holding both would leave neither on the record. The ordering is the
+point: the guard existed before the fix, so the red is a record and not a
+rehearsal.
 
 The general shape, which outlives the MLflow specifics: a property nothing
 asserts is not a property, it is a coincidence -- and this one had already
@@ -110,12 +112,37 @@ is alive.
 
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import traceback
 from pathlib import Path
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# The one connection the guard below found. Silenced here, at module scope,
+# because that runs before pytest imports any test module -- and therefore
+# before tests/test_train.py imports mlflow.
+#
+# Whose choice this is, stated plainly: MLflow chose to phone home by default.
+# This repo chooses not to. The mechanism is theirs -- both switches are
+# MLflow's own (mlflow/telemetry/utils.py checks MLFLOW_DISABLE_TELEMETRY and
+# DO_NOT_TRACK). Nothing is being patched, monkeyed or worked around; a
+# published opt-out is being taken.
+#
+# setdefault, NOT assignment. An operator who has already set either variable
+# -- to opt IN, or to opt out globally via DO_NOT_TRACK -- keeps their setting.
+# This states a default; it does not overrule a decision someone else made. An
+# unconditional `os.environ[...] = "true"` would silently discard the DO_NOT_TRACK
+# convention this repo would be honouring in the same breath as breaking.
+#
+# Not pytest-env: a dependency for one environment variable, and this repo has
+# already declined a heavier version of that same trade. Not CI-only: `uv run
+# pytest` on a laptop would still send the packets, which is not a fix, it is a
+# place to keep the problem.
+# ---------------------------------------------------------------------------
+os.environ.setdefault("MLFLOW_DISABLE_TELEMETRY", "true")
 
 ROOT = Path(__file__).resolve().parents[1]
 

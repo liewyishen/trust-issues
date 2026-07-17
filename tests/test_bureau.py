@@ -29,6 +29,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
@@ -157,8 +158,52 @@ def test_blank_fico_version_rejected():
         CreditReport(**_mutate(fico_version=""))
 
 
+# The bureau roster, PINNED -- and deliberately not derived.
+#
+# serving/bureau.py declares `bureau: Literal[...]` inline; there is no importable
+# constant, so the old version of the test below copied the four names into its
+# own loop. That copy could not notice a fifth name being added: it iterated its
+# memory of the enum, checked those four still validated, and passed while the
+# name "the closed enum" had come to mean a different set. Measured, not assumed
+# -- with "innovis" added to the Literal, that test reported `1 passed`.
+#
+# Deriving the loop's domain does NOT fix it, and this is the interesting part.
+# get_args() over the live Literal, asserting each member validates, is VACUOUS:
+# pydantic accepts Literal members by construction, so the derived loop would
+# dutifully test "innovis", accept it, and pass -- weaker than the copy, not
+# stronger, because it derives its domain from the very thing that changed. It
+# would also stop noticing a DELETION, which the copy does catch (drop "mock" and
+# CreditReport(bureau="mock") raises).
+#
+# So the copy is not the defect here. A pin cannot be derived from the thing it
+# pins -- being written by hand is what makes it a pin. What was missing is that
+# nothing compared the pin to the live enum. get_args() belongs on the OTHER side
+# of that comparison: derive what the code says, pin what we decided, assert they
+# are equal. Exact equality, not membership -- the same shape as
+# `set(rc) == REASON_CODE_KEYS`, which is why that one has never drifted.
+#
+# Adding a bureau is allowed. Adding one without touching this line is not: a new
+# bureau means a new provenance contract, and /score's callers read this field.
+_EXPECTED_BUREAUS = frozenset({"equifax", "experian", "transunion", "mock"})
+
+
 def test_bureau_is_restricted_to_the_closed_enum():
-    for known in ("equifax", "experian", "transunion", "mock"):
+    """Under-claims on purpose: the name says the enum is closed, and the body
+    additionally pins WHICH enum. A name narrower than its body is safe.
+
+    What "the closed enum" refers to is now checkable -- before, the definite
+    article pointed at a roster the test had copied, so "the" meant whichever set
+    the code happened to hold.
+    """
+    live = frozenset(get_args(CreditReport.model_fields["bureau"].annotation))
+    assert live == _EXPECTED_BUREAUS, (
+        f"serving/bureau.py's bureau Literal is now {sorted(live)}, not "
+        f"{sorted(_EXPECTED_BUREAUS)}. If a bureau was added, it needs a "
+        "provenance decision (who pulls it, what fico_version it reports) and "
+        "this pin updated in the same commit -- not after someone notices /score "
+        "returning a source no client knows how to read."
+    )
+    for known in sorted(live):
         assert CreditReport(**_mutate(bureau=known)).bureau == known
     with pytest.raises(ValidationError):
         CreditReport(**_mutate(bureau="dun_and_bradstreet"))

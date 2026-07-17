@@ -1241,12 +1241,42 @@ def test_importing_serving_app_pulls_in_no_untolerated_training_dependency():
     )
 
 
-def test_the_drift_route_is_mounted_here_and_would_not_be_in_the_image():
+def test_the_drift_route_is_mounted_here():
     """DRIFT_DEMO_AVAILABLE is a probe, not a constant: it asks whether the demo's
     machinery is importable from where the app is being built. In this repo it is.
-    In the image -- no scripts/, no pipelines/, no mlflow -- it is not, and the
-    route is simply absent. find_spec answers that WITHOUT importing anything,
-    which is what keeps the test above true."""
+    find_spec answers that WITHOUT importing anything, which is what keeps the
+    test above true.
+
+    THE NAME USED TO END "_and_would_not_be_in_the_image". Nothing below asserts
+    that, and nothing anywhere else does either. The second clause is true, and it
+    rests entirely on three build facts no test reads:
+
+        Dockerfile:51-53   COPY src/ serving/ models/ -- and nothing else, so
+                           scripts/ and pipelines/ never enter the image. By
+                           OMISSION from a list, which is all that holds it up.
+        .dockerignore:18   pipelines/ (belt and braces; scripts/ is not listed
+                           here at all -- it is kept out by the COPY line alone)
+        Dockerfile:44      uv sync --frozen --no-dev --no-group training, so no
+                           mlflow for pipelines/drift_check.py to reach anyway
+
+    Add `COPY scripts/` to the Dockerfile and the old name is false with this test
+    still green. The suite cannot see it: every mention of Dockerfile or
+    .dockerignore in tests/ is a comment or a failure message. Zero assertions
+    read either file.
+
+    NOT FIXED HERE, on purpose. A MetaPathFinder can simulate the modules being
+    absent and prove find_spec then returns None -- but that tests find_spec,
+    and find_spec is not what holds the clause up; the COPY line is. A guard that
+    checks the wrong one of two things reads as coverage and is worse than the
+    honest gap. Building the image is the only thing that would actually answer
+    it, and that is not a unit test.
+
+    So the sentence shrinks to what is proven, the way 6927fa2 shrank
+    ApplicationForm.tsx's determinism claim. test_drift_is_absent_not_broken_when
+    _the_demo_is_not_mounted covers the other half of the IF: given
+    drift_demo=False, /drift is a 404. That the image IMPLIES drift_demo=False is
+    the part nobody asserts.
+    """
     assert DRIFT_DEMO_AVAILABLE is True
     assert importlib.util.find_spec("scripts.demo_drift") is not None
 

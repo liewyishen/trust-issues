@@ -1,7 +1,7 @@
 # trust-issues
 
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
-![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-301%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -338,7 +338,7 @@ project exists to catch, so it is written the long way instead.
 | **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
 | **FastAPI + Pydantic** | The HTTP boundary (`serving/`). Pydantic is the *request contract*, not decoration: closed enums, strict floats (`"700"` is a 422, not a coerced 700), and `extra="forbid"` — a client that submits its own `fico_n` is rejected, because a client that could set its own FICO could describe an applicant whose score never came from a bureau pull |
 | **React + TypeScript + Vite + Tailwind** | The frontend (`frontend/`). Talks to the live API and computes none of its own numbers — the model, the calibrator, the threshold, the drift monitor and the fairness audit are all read off the service. No charting library: the calibrator step function, the drift bars and the bootstrap intervals are hand-drawn SVG/CSS, so nothing is smoothed or interpolated into a curve the data doesn't have |
-| **pytest** | 290 tests across the modeling and serving layers (94 of them in `tests/test_serving.py`) |
+| **pytest** | 301 tests across the modeling and serving layers (94 of them in `tests/test_serving.py`) |
 
 ---
 
@@ -346,7 +346,7 @@ project exists to catch, so it is written the long way instead.
 
 ```bash
 uv sync                                              # install dependencies
-uv run pytest                                        # run the test suite (290 passing)
+uv run pytest                                        # run the test suite (301 passing)
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 uv run python scripts/audit_fairness.py              # re-run the fairness audit -> models/fairness_audit.json
@@ -406,5 +406,5 @@ serving/       FastAPI adapter: /score, /healthz, /calibrator, /fairness, and th
 models/        Trained model + calibrator artifacts (gitignored) -- plus the ONE
                committed file beside them, fairness_audit.json (see .gitignore)
 figures/       Generated plots (gitignored)
-tests/         pytest suite (290 passing)
+tests/         pytest suite (301 passing)
 ```

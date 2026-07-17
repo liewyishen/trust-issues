@@ -66,8 +66,8 @@ docstring). That is what lets this audit be re-run and keep meaning the same
 thing no matter which variant happens to be in production on a given day.
 
 On the real dataset, this reproduces the notebook's headline finding: at
-threshold 0.22, Mississippi's Equal Opportunity ratio is ~0.734 with
-addr_state in the model, and recovers to ~0.990 once addr_state is removed
+threshold 0.22, Mississippi's Equal Opportunity ratio is 0.745 with
+addr_state in the model, and recovers to 0.988 once addr_state is removed
 -- the state label was a shortcut, not a reflection of MS applicants'
 actual financials. The AUC cost of removing addr_state is small (~-0.0036).
 See run_fairness_audit()'s docstring for the full numbers.
@@ -565,7 +565,7 @@ def run_fairness_audit(
         AUC cost of dropping state: -0.0036
 
         state    WITH state    NO state    verdict
-        MS            0.734       0.990    fixed by removal (shortcut / geographic-proxy risk)
+        MS            0.745       0.988    fixed by removal (shortcut / geographic-proxy risk)
 
     i.e. Mississippi's Equal Opportunity ratio recovers from well below the
     0.80 line to essentially parity once addr_state is removed, at a small

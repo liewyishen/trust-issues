@@ -3,7 +3,7 @@ Tests for src/fairness.py
 
 Locks down the CONTRACT of each audit layer, not real-dataset numbers (those
 only mean something at real scale -- see fairness.py's module docstring for
-the real MS 0.734 -> 0.990 finding this module reproduces against the real
+the real MS 0.745 -> 0.988 finding this module reproduces against the real
 CSV):
   1. bootstrap_eo_ci returns a valid (lo <= hi) interval.
   2. Layer 1 flags a state whose good applicants are systematically
@@ -126,7 +126,7 @@ def test_layer1_min_n_filters_small_state():
 # ---------------------------------------------------------------------------
 # 4. Layer 3 ablation: removing a feature used as a geographic shortcut
 # moves that state's EO ratio toward parity (direction only -- not chasing
-# the real dataset's 0.734 -> 0.990).
+# the real dataset's 0.745 -> 0.988).
 # ---------------------------------------------------------------------------
 def _make_split(n, purposes, homes, states, emp_lengths, rng, shortcut_state=None, shortcut_bump=0.0, base_default_rate=0.15):
     fico = rng.uniform(620, 820, n)

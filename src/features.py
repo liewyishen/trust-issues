@@ -34,9 +34,9 @@ emp_order = {
 # fairness conclusion: remove addr_state from the production model") found
 # addr_state functions as a
 # geographic-proxy risk / digital-redlining shortcut: with addr_state in the
-# model, Mississippi's good-applicant Equal Opportunity ratio was ~0.734
+# model, Mississippi's good-applicant Equal Opportunity ratio was 0.745
 # (well below the 0.80 regulatory benchmark); removing addr_state and
-# retraining brought it to ~0.990, at a cost of only -0.0036 test AUC
+# retraining brought it to 0.988, at a cost of only -0.0036 test AUC
 # (0.6690 -> 0.6654). That audit's conclusion -- "remove addr_state from the
 # production feature set" -- is executed here: default OFF, so the SHIPPED
 # model does not use addr_state as a feature.

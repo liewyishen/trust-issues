@@ -34,11 +34,13 @@ patterns. Train is 2007–2014 (n≈453,804), Validation and Calibration are dis
 lower headline number, and a training set that never sees the 2016+ DTI regime — the
 train/serve shift the drift monitor watches.
 
-**Drop `addr_state`.** The ablation put Mississippi's good-applicant
-Equal-Opportunity ratio at ~0.734–0.745 with state included and ~0.988–0.990 without.
-The price, from the authoritative run `cca4c361`, is a test-AUC cost of **0.0036**
-(0.6690 → 0.6654). We paid it: the state label was a geographic proxy, not
-Mississippi's economics.
+**Drop `addr_state`.** The ablation (threshold 0.22) put Mississippi's good-applicant
+Equal-Opportunity ratio at **0.745, 95% CI [0.716, 0.774]** with state included — the
+whole interval under the 0.80 benchmark — and **0.988, CI [0.962, 1.012]** without, the
+two intervals disjoint. The price is a test-AUC cost of **0.0036** (0.6690 → 0.6654).
+Both sides are the authoritative run `cca4c361`'s, reproduced to full precision by the
+frozen `models/fairness_audit.json` that `GET /fairness` serves. We paid it: the state
+label was a geographic proxy, not Mississippi's economics.
 
 **Optimize regret, not pure profit.** The objectives have different break-even
 thresholds for a well-calibrated probability — `m/(m+LGD) = 0.156` for pure profit,

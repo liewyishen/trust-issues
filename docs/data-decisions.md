@@ -1582,3 +1582,129 @@ training)`, both sides computable, and the assertion is `import serving.app` und
 `MetaPathFinder` that blocks them -- a boot simulation, not a leanness claim. Whether that
 is worth building is a decision nobody has made, and this entry does not make it. It is
 recorded so that the decision is available rather than forgotten.
+
+---
+
+## A test name is a quantifier: `pulls_in_no_training_dependency` was false for as long as it was green
+
+**Date:** 2026-07-17.
+
+**Context.** `tests/test_serving.py` has carried a subprocess guard on serving's import
+graph since `341418f`. It was named
+`test_importing_serving_app_pulls_in_no_training_dependency`. It passed. It had always
+passed. It was false the entire time.
+
+    pyproject.toml   [dependency-groups] training = ["matplotlib>=3.11.0",
+                                                     "metaflow>=2.19.35",
+                                                     "mlflow>=3.14.0",
+                                                     "seaborn>=0.13.2"]
+
+    measured         $ python -c "import sys, serving.app; \
+                                  print('matplotlib' in sys.modules)"
+                     True
+
+    the test         1 passed
+
+`matplotlib` is a training dependency. It is in serving's import graph. The test that
+says it is not was green — because it never asked. The watched list was a hand-copied
+tuple holding three of the group's four members, and the member it omitted was the one
+that leaks.
+
+**What the name promised, and what the body checked.** The name quantifies over "training
+dependency" — a universal, with a definition living in `pyproject.toml`. The body checked
+membership in `('mlflow', 'metaflow', 'seaborn', 'pipelines', 'src.fairness',
+'scripts.demo_drift')`, a literal typed by hand on some particular day. Those are not the
+same set and nothing made them agree. A transcription is only as true as the moment
+someone typed it, and nothing announces the moment it stops being true. This one had
+stopped. The assertion could not see it, because the assertion was not looking at the
+group — it was looking at a memory of the group.
+
+**Both of us defended this name one round earlier, while hunting for exactly this.** The
+review that produced `6764375` asked whether the name over-claimed — whether "no training
+dependency" was being read as "serving stays lean" — concluded it did not, and wrote so.
+That conclusion was correct and it was not the question. Nobody asked whether the
+narrower claim was TRUE. The name looked safe *because* it was narrower than the comment
+above it, and a narrower claim reads as a checked one. `6764375`'s commit message
+contains a section titled **"WHY THE TEST WAS NEVER WRONG."** That sentence is false, it
+is unamendable, and this entry is where it gets corrected. The assertion was never wrong.
+The name was.
+
+**Why code cannot hold this.** The test *should* be green. `matplotlib` is genuinely
+tolerated: `serving/artifacts.py` imports `lightgbm`, `lightgbm.compat` does `try: import
+matplotlib / except ImportError: MATPLOTLIB_INSTALLED = False`, and the slim image runs
+without it. There is no defect to fix and no assertion to strengthen. The only thing
+wrong was a word. That is precisely the class of thing this file exists for: a decision
+code cannot carry.
+
+**The fix, and what it moved.** `de52802` made the test derive `[dependency-groups]
+training` from `pyproject.toml` instead of restating it, and landed **red on
+`matplotlib`, on purpose** — the record that the claim was false before anyone fixed it,
+the same reason `e8bc315` committed the network guard red, and the mistake `6e759b8`
+made by squashing a finding into its fix. `3840807` then wrote the tolerance where it
+executes:
+
+    _TOLERATED = frozenset({"matplotlib"})
+
+**That is the first time the exception has existed anywhere that runs.** It was already
+correct, and already written five times, across four files: `pyproject.toml` twice (the
+`[project]` comment and the training-group comment), `docs/design.md`'s serving-layer
+section, this file's *"Why 'serving never reaches `matplotlib`' was false"* entry, and
+`README.md`'s serving-layer section. Five correct copies, and a green test contradicting
+all five, for as long as prose was the only place the exception lived. Prose is not what
+a subprocess disagrees with.
+
+**This entry sits beside `:916`, it does not correct it.** That entry says grep could not
+catch `matplotlib` because `matplotlib` is never spelled in `serving/`, and only
+`sys.modules` could. True, and true within its scope: it is about the *method* that finds
+a leak. This is about a *name* that misdescribes a leak the method already found. `:916`
+found the fact in 2026-07-12 and wrote it down five times. The test kept saying otherwise
+for five more days. Neither entry is the other's correction.
+
+**The tolerance is hand-written and cannot be derived — so it was given an expiry
+instead.** "Which imports does `lightgbm` wrap in `try`/`except`" is a fact about
+`lightgbm`'s source, not a row in a table this repo owns. A decision, not a definition.
+Derivation is unavailable, so `_TOLERATED - present` must be empty: if `matplotlib` ever
+stops being reached, the tolerance becomes a claim about a package nothing pulls and the
+test says so. Mutation-tested — `_TOLERATED = {"matplotlib", "seaborn"}` fails. An
+exception that cannot expire is how the transcription it replaced stayed green while
+false.
+
+**The name changed too, and the reason is worth keeping.** "No X" is a universal;
+`matplotlib` is a counterexample; declaring the exception makes the *body* honest, not
+the name. It is now `..._no_untolerated_training_dependency` — the quantifier gets its
+qualifier, as in `88301a1`'s `_in_one_process`. The charitable reading ("training
+dependency" means "something serving needs the training group for," which `matplotlib` is
+not) is available and is what carried the name through review. It does not survive the
+derivation: once the test reads the group instead of remembering it, that group's members
+are what the name is quantified over.
+
+### What is deliberately not written here
+
+There is a wider shape visible behind this — a general law about instruments aimed at
+enumerations, spanning several rounds of this audit. **It is not written, and the omission
+is the point.** It has no enforcement: the only mechanism that would check it is a
+name-versus-body checker, which this repo has twice declined as a meta-loop, and rightly
+— a name is a claim in English and no rule reads it. Worse, the author of that law was
+shown wrong on this very entry one round ago, and elevating a fresh finding into a
+universal is the same move as the blocklist that caused it: generalising from what you
+happened to notice. Two instances of a shape are a shape, not a law. It is recorded as
+visible and unwritten so that the next person to see it knows it was seen and declined,
+rather than missed.
+
+### The method that found this had the same defect
+
+The scan that produced this entry flagged test names by matching a **16-word list** of
+quantifiers and scope words (`across_`, `every_`, `always_`, `never_`, `all_`, `any_`,
+process, instance, route, …). It flagged 37 of 273 test functions. Those 37 were read by
+hand. **236 were not read at all — a word list decided they were uninteresting.**
+
+That word list is a damage inventory, not an exposure inventory, in exactly the sense
+this file's `:1368` entry means it: it can only find names that used a word someone
+thought of in advance. The proof is in this round's own results. The second finding
+(`test_bureau_is_restricted_to_the_closed_enum`, a transcribed enum roster) was **not in
+the 37**. It surfaced from a different, looser lens run as a self-check — one that was
+nearly not run at all, and that flagged 85 further names nobody has read.
+
+**So: four findings is what the list found. It is not what exists.** The number is a
+lower bound and must not be read as a count. The same failure this entry describes, in
+the method that discovered it, in the same round.

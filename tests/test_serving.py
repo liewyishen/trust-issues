@@ -1168,10 +1168,20 @@ _FIRST_PARTY_LEAKS = frozenset({"pipelines", "src.fairness", "scripts.demo_drift
 # already written in prose five times over, in four files, and not one of them
 # runs: pyproject.toml:28-34 and again at :79-84, docs/design.md's serving-layer
 # section, docs/data-decisions.md's "Why 'serving never reaches matplotlib' was
-# false" entry, and README.md's serving-layer section. All five are correct. All
-# five are narration. The transcription this replaces was green for exactly as
-# long as the tolerance lived only in prose, because prose cannot be the thing a
-# subprocess disagrees with.
+# false" entry, and README.md's serving-layer section. SIX now, in five files:
+# 0f40fd0 added Dockerfile:38-49, which until then said serving's import graph
+# "never reaches" all four -- not a sixth copy of the tolerance but the opposite
+# of it, and false. All six are correct. All six are narration. The
+# transcription this replaces was green for exactly as long as the tolerance
+# lived only in prose, because prose cannot be the thing a subprocess disagrees
+# with.
+#
+# That "SIX" is a correction, and the correction is the point. This comment said
+# five, in four files, and was right when 3840807 wrote it. 0f40fd0 made it six
+# and did not come back here -- in the commit whose entire subject was one claim
+# drifting across copies nobody had counted. A number about how many places a
+# claim lives is itself a claim living in a place. Same disease, one level up,
+# four commits later, in the comment diagnosing it.
 #
 # Hand-written on purpose, and it cannot be derived: "which imports does lightgbm
 # wrap in try/except" is a fact about lightgbm's source, not a row in any table

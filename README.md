@@ -175,15 +175,6 @@ credit system.
 
 ![Serving flow](docs/architecture-serving.png)
 
-> **The PNG above lags its source as of 2026-07-19**, in three places: the `/score` arrow now reads
-> `— one applicant → one decision, explained twice`, and both captions now say `response box and the
-> /score arrow` where the image says `response box`. Everything else in the image is current,
-> including the `ExplainedScoreResponse` box. Re-export with the page's own Export-as-PNG button.
->
-> An export taken before this note was rewritten is *not* the one to commit: it rendered the arrow
-> text overlapping the label beside it, because the widened heading ran 55px past where that label
-> starts. The source has been re-laid-out since; the fix is in the same commit as this note.
-
 *[Interactive version](docs/architecture-serving.html) — same convention as the training diagram:
 every label cites the symbol it was verified under, and the page's Export-as-PNG button regenerates
 the image above.*

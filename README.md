@@ -109,9 +109,11 @@ never see. Full write-up in [`docs/data-decisions.md`](docs/data-decisions.md).
 The audits above are not screenshots in a write-up — there is a **live React frontend** talking to
 the **real FastAPI service**, and none of its numbers are computed in the browser. Fill in the form,
 and the decision that comes back is the shipped booster's, composed with the shipped calibrator, at
-the threshold the pipeline actually chose. The explanation is checkable on the page: the reason
+the threshold the pipeline actually chose. The **additivity** is checkable on the page: the reason
 codes sum, with the base value, to the model's own raw margin — the service returns a **500 rather
-than a decision** if they don't (`src/explain.py`'s `_assert_additivity`).
+than a decision** if they don't (`src/explain.py`'s `_assert_additivity`). The plain-language
+**`explanation`** is a second artifact with a weaker claim — rendered in code (`serving/render.py`,
+no model) and displayed byte for byte, it is readable where the additivity is checkable.
 
 The frontend exists to make the existing rigor *visible*. It does not change a single number.
 

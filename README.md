@@ -177,12 +177,6 @@ credit system.
 every label cites the symbol it was verified under, and the page's Export-as-PNG button regenerates
 the image above.*
 
-> **The PNG above is one commit behind the HTML.** The response box became
-> `ExplainedScoreResponse` (it now carries `explanation`, rendered by `serving/render.py`); the HTML
-> is updated and the PNG is not, because regenerating it needs the page's Export-as-PNG button in a
-> browser. Nothing else changed — still five routes, same flow. Said here rather than left for a
-> reader to discover, which is the whole point of the convention above.
-
 *Read this one differently from the diagram above: it traces HTTP requests through the five routes,
 not a pipeline run. Its legend adds bracket notation — `[X]` a gate that can halt, `( )` a normal
 step, `{ }` a **deferred** branch — and one marker the training diagram has no need for: **dev-only**,

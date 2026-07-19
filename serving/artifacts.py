@@ -46,6 +46,28 @@ class ArtifactBundle:
     with no exception raised, because the arithmetic is still valid, merely
     about the wrong applicant.
 
+    "UNDER CONCURRENCY" IS REAL IN PRINCIPLE AND UNREACHABLE AS SHIPPED, and
+    this paragraph carried the first half without the second. /score is an
+    `async def` handler that never awaits, so two calls do not interleave:
+    measured, one thread, disjoint in-handler intervals. The mechanism above is
+    unchanged and still the reason nothing is cached -- what was missing is that
+    the danger is DOUBLE-covered, once by rebuilding per request
+    (serving/app.py:383-388) and once by non-overlap, and only the first cover
+    was written down. The second is one keyword deep: as a `def` handler /score
+    runs in Starlette's threadpool and the same two calls measurably overlap,
+    for no wall-clock gain, because the work is CPU-bound and the GIL serializes
+    it regardless. So caching this explainer is safe TODAY for a reason the
+    caching diff would not mention -- which is exactly how two individually
+    correct changes become one silent wrong answer.
+
+    5bc5ac7 made "as shipped" a checked fact rather than a sentence:
+    tests/test_serving.py's test_score_cannot_yield_the_event_loop_mid_request
+    asserts FastAPI's own dispatch switch (dependant.is_coroutine_callable) and
+    the absence of any await in the handler. This was the THIRD copy of that
+    claim; 5bc5ac7 scoped docs/design.md:131 and docs/explainability.md:868 and
+    named this one, which a No-serving/ scope constraint held back exactly one
+    commit -- not because it was any less over-broad.
+
     67 ms per request buys statelessness. See _get_explainer's docstring
     (explain.py) and docs/explainability.md Section 10, which records
     the pred_contrib migration that would remove the cost entirely and is

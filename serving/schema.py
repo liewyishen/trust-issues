@@ -349,6 +349,56 @@ class ScoreResponse(BaseModel):
     credit_report: ScoredCreditReport
 
 
+class ExplainedScoreResponse(ScoreResponse):
+    """
+    What /score actually returns: a ScoreResponse plus its own rendering.
+
+    A SUBCLASS AND NOT A FIELD ON ScoreResponse, for two reasons that are the
+    same reason twice.
+
+    First, it would be circular. serving/render.py takes a ScoreResponse and
+    produces the string; putting the string ON that model means the renderer
+    receives an object containing its own output. render.py's partition guard
+    (test_schema_partition_is_total) would then have to classify a field the
+    renderer is REQUIRED to ignore -- a third category whose only member exists
+    to be skipped -- and constructing a response in order to render it would
+    need a placeholder explanation, i.e. a type asserting an explanation exists
+    before one does. Split this way, ScoreResponse stays exactly the renderer's
+    INPUT and the partition needs no new category at all.
+
+    Second, the mirror invariant. tests/test_serving.py asserts
+    set(ScoreResponse.model_fields) == explain_applicants()'s keys |
+    {credit_report} -- everything here is explain_applicants()'s except exactly
+    one key. Adding `explanation` to ScoreResponse would make that "except
+    exactly two", and the two exceptions are exceptions for DIFFERENT reasons:
+    credit_report comes from a different SOURCE (the bureau), `explanation` is
+    DERIVED FROM THIS RESPONSE. A set holding both would have no honest name --
+    which is the error ScoredCreditReport's docstring already records having
+    made once, with the constant that tried to call fico_n "provenance". Two
+    reasons get two invariants rather than one stretched set.
+
+    So the exception is not merged, it is stacked: ScoreResponse keeps its
+    invariant untouched and this class adds exactly one field on top, asserted
+    in the same additive form by
+    test_explained_response_adds_exactly_the_explanation.
+
+    WHY IT IS FOLDED INTO /score RATHER THAN GIVEN ITS OWN ROUTE. The whole
+    argument for rendering in code is that a decision must be explainable in
+    terms of the data it used. A separate /explain route would make the
+    explanation SERVABLE WITHOUT the decision it explains -- and, if it
+    re-scored, servable for a decision no caller ever received. Folded here,
+    there is no way to obtain one without the other, which is the same
+    principle that put credit_report on this response instead of behind a
+    second call.
+    """
+
+    # The rendered prose. serving/render.py builds it from the fields above --
+    # every one of them, or a recorded refusal with a reason. No model, no
+    # network: see that module's docstring for the eight real LLM calls that
+    # settled it.
+    explanation: str
+
+
 class HealthResponse(BaseModel):
     """Readiness, plus the identity of what is loaded."""
 

@@ -91,6 +91,17 @@ HTTP boundary and of nothing beneath it:
      bound the image in either direction.
 
      /drift is the first route whose machinery lives behind that line.
+ 18. /score returns the rendered explanation WITH the decision, never behind a
+     second route. serving/render.py is pure code with no model in it, so what
+     is tested here is only the wiring: that the route adds nothing the
+     renderer did not produce, and that folding the string in did not cost the
+     two invariants it could have. ScoreResponse's own mirror (item 2) and
+     render.py's field partition are both untouched and still green -- which is
+     the point of ExplainedScoreResponse being a SUBCLASS. A field on
+     ScoreResponse would have made the renderer's input contain the renderer's
+     output, and would have merged two exceptions that exist for different
+     reasons into one set with no honest name -- the error the constant behind
+     `credit_report` already made once.
 
 Plus, carried across the HTTP boundary from tests/test_explain.py: no
 probability-scale contribution leaks into the response.
@@ -145,10 +156,16 @@ from src.model_io import _x, load_model_artifact, train_lgb
 from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
 from src.explain import DEFAULT_EXPLAIN_THRESHOLD, explain_applicants
 
+import serving.app
 from serving.app import DRIFT_DEMO_AVAILABLE, create_app
 from serving.artifacts import load_bundle
 from serving.bureau import CreditBureau, CreditReport, MockBureau
 from serving.config import FAIRNESS_AUDIT_PATH, SELECTED_THRESHOLD
+from serving.render import (
+    NOT_RENDERED_FIELDS,
+    RENDERED_FIELDS,
+    render_explanation,
+)
 from serving.fairness import (
     FairnessAudit,
     audit_model_trained_at,
@@ -157,6 +174,7 @@ from serving.fairness import (
 )
 from serving.schema import (
     EMP_LENGTH_NOT_DISCLOSED,
+    ExplainedScoreResponse,
     VALID_EMP_LENGTH,
     ScoredCreditReport,
     ScoreRequest,
@@ -1763,3 +1781,101 @@ def test_the_sweep_contains_the_operating_point_exactly_not_nearly(fairness_clie
     )
     # And it is a real approval rate, not a placeholder.
     assert 0.0 < rows[0]["national_good_approval_rate"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# 18. /score serves the explanation WITH the decision. The route is a thin
+#     adapter over serving/render.py -- no logic, nothing added.
+#
+#     The renderer's own 29 guards live in tests/test_render.py and are not
+#     repeated here. What is checked here is exactly what crossing the HTTP
+#     boundary could break: that the served string is the one render_explanation
+#     produces, that it cannot be obtained without the decision, and that the
+#     two invariants folding it in could have cost are still intact.
+# ---------------------------------------------------------------------------
+def test_score_serves_the_rendered_explanation(client):
+    """The route adds nothing. Byte-equality against the renderer called
+    directly on a ScoreResponse rebuilt from the same body."""
+    body = client.post("/score", json=GOOD).json()
+    assert "explanation" in body
+
+    without = {k: v for k, v in body.items() if k != "explanation"}
+    assert body["explanation"] == render_explanation(ScoreResponse(**without))
+
+
+def test_the_explanation_cannot_be_served_without_the_decision(client):
+    """
+    The say-equals-do reason this is folded into /score rather than given its
+    own route. A separate /explain would make the prose obtainable alone --
+    and, if it re-scored, obtainable for a decision no caller ever received.
+    There is no route that returns one without the other.
+    """
+    paths = {r.path for r in client.app.routes if isinstance(r, APIRoute)}
+    assert "/explain" not in paths, (
+        "a route serving the explanation alone reopens exactly the separation "
+        "folding it into /score was chosen to prevent"
+    )
+    body = client.post("/score", json=GOOD).json()
+    for inseparable in ("decision", "p_calibrated", "threshold", "reason_codes"):
+        assert inseparable in body
+
+
+def test_explained_response_adds_exactly_the_explanation():
+    """
+    The additive form, stacked rather than merged. ScoreResponse keeps its own
+    mirror invariant (test_response_mirrors_explain_applicants_key_for_key,
+    unchanged and green); this asserts the subclass adds exactly one field on
+    top. Two exceptions for two different reasons, two separate assertions --
+    instead of one "except these keys" set that would have to hold both a
+    bureau-sourced object and a self-derived string.
+    """
+    assert (set(ExplainedScoreResponse.model_fields)
+            == set(ScoreResponse.model_fields) | {"explanation"})
+
+
+def test_folding_the_explanation_in_did_not_touch_the_renderer_partition():
+    """
+    render.py's partition is over ScoreResponse, the renderer's INPUT. If the
+    explanation had been added there instead, the partition would have needed a
+    third category whose only member exists to be ignored. It needs none:
+    ScoreResponse is unchanged, so RENDERED | NOT_RENDERED still covers it
+    exactly -- and ExplainedScoreResponse's extra field is deliberately NOT in
+    either set, because the rendering is not something the renderer reads.
+    """
+    assert (set(ScoreResponse.model_fields)
+            == RENDERED_FIELDS | set(NOT_RENDERED_FIELDS))
+    assert "explanation" not in RENDERED_FIELDS
+    assert "explanation" not in NOT_RENDERED_FIELDS
+
+
+def test_scoring_stays_one_code_path(client, monkeypatch):
+    """
+    Rendering happens AFTER scoring, off the ScoreResponse the same
+    explain_applicants() call produced -- it does not re-score, re-fetch or
+    consult the artifacts a second time. One call to the decision per request,
+    so the prose cannot describe a decision /score would not have made.
+    """
+    calls = []
+    real = serving.app.explain_applicants
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(serving.app, "explain_applicants", counting)
+    r = client.post("/score", json=GOOD)
+    assert r.status_code == 200
+    assert len(calls) == 1, f"expected one scoring call, got {len(calls)}"
+    assert r.json()["explanation"]
+
+
+def test_rendering_adds_no_await_to_the_handler(client, bundle):
+    """
+    5bc5ac7's guard, re-asserted after the wiring. Rendering is pure and
+    measured at 7.4 us median against this request's ~67 ms TreeExplainer
+    construction, so it must not have introduced a suspension point -- the
+    execution model is what makes the uncached-explainer hazard unreachable.
+    """
+    route = _api_route(create_app(bundle=bundle, bureau=MockBureau()), "/score")
+    assert route.dependant.is_coroutine_callable
+    assert not _contains_await(route.endpoint)

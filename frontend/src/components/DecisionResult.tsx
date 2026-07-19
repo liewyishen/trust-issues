@@ -14,12 +14,22 @@ import { toPlotPoint } from "@/lib/calibrator"
 import { cn } from "@/lib/utils"
 
 /*
- * Four tiers, in the order a reader needs them.
+ * Five tiers, in the order a reader needs them.
  *
  *   1  the pull the system made      -- what the decision was made ON
  *   2  the decision                  -- what was decided, and the named reasons
  *   3  the calibrator                -- WHY that probability and not a nearby one
  *   4  the additive explanation      -- collapsed; proof the tiers above cohere
+ *   5  the plain-language notice     -- the same facts, as an applicant reads them
+ *
+ * Tiers 1-4 address an auditor: raw column names, log-odds, six decimal places,
+ * an identity to check. Tier 5 addresses the applicant, and is the backend's
+ * prose verbatim. It restates tier 2's factors in words -- deliberately. They
+ * are two VIEWS of one derivation (_rank_adverse, explain.py), not two sources
+ * that could disagree: both read the same reason_codes off the same response in
+ * the same render pass, and both print contributions at four places. An
+ * adverse-action notice has to be readable on its own; that it overlaps the
+ * audit view above is what makes it a notice rather than a caption.
  *
  * Tier 3 sits where it does deliberately. Tier 2 shows a probability; tier 4
  * shows contributions in log-odds and declines to convert them into probability
@@ -52,7 +62,60 @@ export function DecisionResult({
         <CalibratorUnavailable error={calError} />
       ) : null}
       <TechnicalTier r={r} />
+      <PlainLanguageNotice text={r.explanation} />
     </div>
+  )
+}
+
+// ===========================================================================
+// TIER 5 -- the backend's prose, byte for byte.
+//
+// LAST on the page, and that is the layout decision, not a leftover. The
+// notice states the calibrated probability as "0.147"; tier 2 states the same
+// figure as "14.72%" in 18px type. Two renderings of ONE number, and unlike
+// the log-odds case there is no scale word that separates them -- both are
+// probabilities. The only thing that keeps a reader from taking them for two
+// quantities is distance and a boundary, so the notice gets its own card at
+// the far end of the page rather than a slot beside the percentages.
+//
+// The same boundary does the log-odds job: the notice's factor figures
+// (+0.8941) sit inside a bordered mono block with its own heading, not loose
+// beside tier 2's probability. The heading carries the scale label -- FRONTEND
+// chrome, because the string itself is not ours to annotate.
+// ===========================================================================
+function PlainLanguageNotice({ text }: { text: string }) {
+  return (
+    <Card>
+      <CardHeader className="flex items-baseline justify-between gap-3">
+        <CardTitle>Plain-language explanation</CardTitle>
+        <div className="text-[10px] text-faint">
+          contribution figures in <span className="text-muted">log-odds</span> — not
+          probabilities
+        </div>
+      </CardHeader>
+      <CardContent>
+        {/* Rendered as a JSX child, so React inserts the string and nothing
+            else: no parse, no split, no join, no template. whitespace-pre-wrap
+            keeps every newline and every leading space, which is what carries
+            the numbered factor list; it soft-wraps the prose lines that run
+            wider than the card instead of hiding their contribution figures off
+            the right edge. How many such lines there are depends on the payload
+            -- a count written here would be the cardinality mistake render.py's
+            own docstring records. Soft-wrapping chooses where a line CONTINUES
+            and adds no character: the bytes displayed are the bytes served. */}
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface-2/50 p-3 font-mono text-[12px] leading-relaxed text-muted">
+          {text}
+        </pre>
+        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+          Rendered by the service (<code>serving/render.py</code>), not in this browser and
+          not by a language model — the wording is fixed strings reviewed in a diff, and{" "}
+          <code>/score</code> re-checks the prose against the response it describes before
+          returning either. Shown here exactly as served, down to the line breaks. The two
+          probabilities it quotes are the same figures tier 2 shows as percentages, written
+          as decimals at three places.
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 

@@ -27,7 +27,14 @@ export interface ScoreRequest {
 }
 
 // --------------------------------------------------------------------------
-// Response. Mirrors ScoreResponse key-for-key.
+// Response. Mirrors serving/schema.py's ExplainedScoreResponse -- which is
+// ScoreResponse plus exactly one field, `explanation`. The interface below
+// keeps the base class's name because that is what 29 references across six
+// files already call it; the wire type is the subclass. Naming the subclass
+// here would be more precise and would also be the whole of the diff, which is
+// why it was left -- but "mirrors ScoreResponse key-for-key" was false the
+// moment /score started returning the subclass, and a mirror claim that has
+// stopped being true is the exact staleness this client is written against.
 //
 // There is no `contribution_to_probability`, here or there, and its absence is
 // not an omission: docs/explainability.md proves percentage-point attribution is
@@ -72,6 +79,15 @@ export interface ScoreResponse {
   model_trained_at: string | null
   calibrator_trained_at: string | null
   credit_report: ScoredCreditReport
+  /** The one field ExplainedScoreResponse adds. Plain-language prose rendered
+   *  by serving/render.py -- pure code, no model, self-checked against
+   *  explanation_fragments() before /score will return it. Multi-line, with a
+   *  two-space-indented factor list. This client displays it BYTE FOR BYTE and
+   *  never parses, splits, reflows or reformats it: the renderer's care is all
+   *  in the exact wording (it says "the length of your employment history"
+   *  rather than "10 years", because emp_order maps "10+ years" to 10), and
+   *  every one of those choices survives only if nothing here touches it. */
+  explanation: string
 }
 
 /** serving/schema.py's CalibratorResponse -- the shipped calibrator's own shape,

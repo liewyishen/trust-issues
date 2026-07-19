@@ -871,6 +871,19 @@ that hazard is a real silent-wrong-answer race -- request A's write inside
 `TreeExplainer.shap_values` can land between request B's call and B's read inside
 `src/explain.py`'s `_shap_matrix()`, and no exception is raised.
 
+**"Under concurrency" is doing more work in that sentence than the shipped
+service earns.** `/score` is an `async def` handler that never awaits, so two
+calls cannot interleave — measured, they run on one thread in disjoint
+in-handler intervals. The race above is real in principle and *unreachable*
+under the current execution model; the per-request rebuild is the first cover,
+non-overlap is the second, and until
+`tests/test_serving.py`'s `test_score_cannot_yield_the_event_loop_mid_request`
+nothing recorded that the second one existed. That matters because it is one
+keyword deep: declaring `/score` as `def` moves it into Starlette's threadpool,
+where the same two calls measurably overlap — and buys nothing, because the work
+is CPU-bound and the GIL serializes it regardless. Caching the explainer is safe
+*today* for a reason the caching diff would not mention.
+
 The price is that three LightGBM output conventions, currently absorbed by shap,
 become ours to uphold:
 

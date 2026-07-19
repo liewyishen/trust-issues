@@ -130,7 +130,16 @@ Constraints a serving design must answer, not defects to apologize for.
   request has neither. The gate is a *training* contract.
 - **`TreeExplainer.expected_value` is instance state**, overwritten by every
   `shap_values()` call, so a shared explainer is unsafe under concurrency
-  ([`explainability.md`](explainability.md) §10).
+  ([`explainability.md`](explainability.md) §10) — *in principle*. **Under the
+  shipped execution model that race is unreachable**, and this sentence used to
+  imply otherwise. `/score` is an `async def` handler that never awaits, so two
+  calls do not interleave: measured, one thread, disjoint in-handler intervals.
+  The danger is double-covered — once by rebuilding the explainer per request,
+  once by non-overlap — and the second cover is one keyword deep. As a `def`
+  handler `/score` runs in Starlette's threadpool and the intervals overlap, for
+  no wall-clock gain (the work is CPU-bound). `tests/test_serving.py`'s
+  `test_score_cannot_yield_the_event_loop_mid_request` is what makes "under the
+  shipped execution model" a checked fact rather than this paragraph.
 - **`fico_n` comes from a mock bureau.** `/score` fetches it through the
   credit-bureau layer (`serving/bureau.py`'s `CreditBureau` protocol), not off
   the request — a client that submits its own `fico_n` is rejected

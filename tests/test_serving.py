@@ -39,10 +39,15 @@ HTTP boundary and of nothing beneath it:
      produce a 500, never a 200 with a decision. This is what proves score()
      did not take explain_applicants()'s precomputed escape hatch, which
      bypasses _shap_matrix and therefore bypasses the guard.
- 12. No explainer is cached: one TreeExplainer is constructed per request.
-     The concurrency hazard is invisible to a single-threaded test client, so
-     the construction count is the only thing that can hold the decision in
-     place.
+ 12. No explainer is cached: one TreeExplainer is constructed per request, and
+     the execution model that makes the hazard unreachable is pinned rather
+     than assumed. The construction count holds the decision. The second test
+     holds the other half nobody had written down: /score is `async def` and
+     never awaits, so two calls cannot interleave -- measured, disjoint
+     in-handler intervals on one thread. The hazard is not "invisible to a
+     single-threaded test client" (what this item used to say, which reads as a
+     live danger we merely cannot see); it is double-covered, and the second
+     cover is one keyword deep.
  13. fico_n comes from CreditBureau.fetch(applicant_id), not from the
      request: the bureau is called with exactly the submitted applicant_id, the
      pull it returns surfaces in the response under `credit_report` -- the
@@ -96,6 +101,7 @@ Run:  pytest tests/test_serving.py -v
 from __future__ import annotations
 
 import dataclasses
+import dis
 import importlib.util
 import json
 import re
@@ -110,6 +116,7 @@ import pandas as pd
 import pytest
 import joblib
 import shap
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 # The drift monitor's OWN thresholds. Imported, never retyped -- the tests below
@@ -659,12 +666,17 @@ def test_without_the_guard_the_same_corruption_returns_a_wrong_decision(client, 
 
 
 # ---------------------------------------------------------------------------
-# 12. No explainer is cached. One construction per request.
+# 12. No explainer is cached. One construction per request -- and the execution
+#     model that makes the alternative survivable is pinned, not assumed.
 #
 #     expected_value is instance state mutated by shap_values() (inside
-#     TreeExplainer.shap_values). The hazard is invisible to a single-threaded test client,
-#     so the construction COUNT is the only thing that can hold this decision
-#     in place against a future "obvious" optimization.
+#     TreeExplainer.shap_values). UNREACHABLE, not merely invisible: this
+#     comment used to say the hazard was "invisible to a single-threaded test
+#     client", which reads as "our test can't see a live danger". Measured, the
+#     danger is not live. /score is an `async def` handler that never awaits, so
+#     two calls do not interleave AT ALL -- same thread, disjoint in-handler
+#     intervals. The construction count holds the decision; the second test
+#     holds the reason the decision is currently double-covered.
 # ---------------------------------------------------------------------------
 def test_one_explainer_is_constructed_per_request(client, monkeypatch):
     constructions = []
@@ -677,6 +689,131 @@ def test_one_explainer_is_constructed_per_request(client, monkeypatch):
     for _ in range(3):
         assert client.post("/score", json=GOOD).status_code == 200
     assert len(constructions) == 3
+
+
+# Opcodes that are a yield point to the event loop. GET_AWAITABLE is `await`;
+# the rest are the sugar that compiles to one without the keyword appearing in
+# the source (`async with`, `async for`). Listed rather than derived because
+# CPython's opcode set is not a table this repo owns -- a decision, so it is
+# checked below by the mutation this test was built against rather than trusted.
+_AWAIT_OPCODES = frozenset(
+    {"GET_AWAITABLE", "SEND", "END_SEND", "GET_ANEXT", "BEFORE_ASYNC_WITH"}
+)
+
+
+def _contains_await(fn) -> bool:
+    """Does fn's own body contain a yield point to the event loop?
+
+    Scans fn's code object and every code object nested inside it, so an await
+    in a branch, a comprehension or an `async with` counts. Verified against all
+    four shapes plus a negative before this was relied on.
+
+    Scanning only fn's OWN body is sufficient rather than lazy: a synchronous
+    callee cannot yield to the event loop no matter what it contains. The /score
+    handler calls explain_applicants(), a plain `def`, so everything that
+    function does is part of this handler's uninterruptible stretch.
+    """
+    seen: set[int] = set()
+    stack = [fn.__code__]
+    while stack:
+        code = stack.pop()
+        if id(code) in seen:
+            continue
+        seen.add(id(code))
+        if any(ins.opname in _AWAIT_OPCODES for ins in dis.get_instructions(code)):
+            return True
+        stack.extend(const for const in code.co_consts if hasattr(const, "co_code"))
+    return False
+
+
+def _api_route(app, path: str) -> APIRoute:
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path == path:
+            return route
+    raise AssertionError(f"no APIRoute at {path}")
+
+
+def test_score_cannot_yield_the_event_loop_mid_request(bundle):
+    """/score runs to completion without yielding, so two calls cannot interleave.
+
+    WHY THIS EXISTS. serving/artifacts.py, docs/design.md and
+    docs/explainability.md all justify rebuilding a TreeExplainer per request
+    (~67 ms) by "a shared explainer is unsafe under concurrency". True in
+    principle. Measured against the real explain path, /score does not overlap
+    ITSELF -- as shipped, two concurrent calls ran on MainThread in disjoint
+    in-handler intervals (0.6->112.9 ms, then 113.9->218.2 ms). The race those
+    three sites describe is unreachable under the current execution model.
+
+    So the danger is double-covered: once by rebuilding, once by non-overlap.
+    Nothing recorded that the second cover exists, and it is one keyword deep.
+    Two individually-correct changes remove it:
+
+      1. Someone caches the explainer to save the 67 ms. They read design.md,
+         measure non-overlap, conclude caching is safe -- AND THEY ARE RIGHT,
+         today.
+      2. Someone makes /score a `def` handler for latency. Measured, the same
+         two calls then land on two AnyIO worker threads with OVERLAPPING
+         intervals (4.4->199.0 ms and 7.6->200.3 ms).
+
+    Two clean diffs, a silent wrong answer, and nothing red. This is the rope on
+    step 2. (It buys no latency either: `def` wall 201 ms vs `async def` 219 ms
+    for the same pair -- the work is CPU-bound and the GIL serializes it anyway.
+    The threadpool arms the race without paying for it.)
+
+    WHAT IS LOAD-BEARING, AND WHAT IS ONLY THE ILLUSTRATION. The interval
+    numbers above are timestamps, and timestamps flake -- they are why this test
+    exists, not what it asserts. The property is read off the CODE:
+
+      clause 1  fastapi/routing.py:386 dispatches on
+                `dependant.is_coroutine_callable`; when it is False the handler
+                goes through run_in_threadpool (routing.py:346). This asserts
+                the framework's own switch, not a proxy for it.
+      clause 2  the handler contains no await, so once it starts it cannot be
+                suspended part-way.
+
+    NEITHER CLAUSE ALONE IS ENOUGH, and the reason is worth writing down because
+    the weaker one looks sufficient. Measured on three variants: clause 1 alone
+    passes a handler that awaits mid-body (still on the loop, but yields);
+    clause 2 alone passes the `def` regression VACUOUSLY -- a plain function
+    contains no await either, so "no await" is trivially true of exactly the
+    change this test was built to catch.
+
+    NOT A ROUTE TRAVERSAL. This names /score, one handler, because /score is the
+    only route that reaches explain_applicants() (serving/app.py:402, the sole
+    call site in serving/). Naming the one handler on the hazard path is not the
+    enumeration defect -- sweeping all handlers would be, and it would also fail
+    on FastAPI's own /docs, /redoc and /openapi.json, which are `async def` with
+    no await because that is how the framework writes them, not because anything
+    is wrong. A guard that reports the framework is not reporting a bug.
+
+    WHAT IT DOES NOT SAY: nothing about latency, throughput, or whether serving
+    blocking work on the loop is a good idea. /score occupying the loop for
+    ~100-155 ms is real and is not a defect this repo has claimed otherwise
+    about. This asserts one thing -- the handler is atomic with respect to the
+    loop -- because that is the fact the explainer decision leans on.
+    """
+    route = _api_route(create_app(bundle=bundle, bureau=MockBureau()), "/score")
+
+    assert route.dependant.is_coroutine_callable, (
+        "/score is no longer a coroutine function, so FastAPI now runs it in "
+        "Starlette's threadpool (fastapi/routing.py:346). Two /score calls can "
+        "then execute concurrently, and the shared-mutable-expected_value race "
+        "described in serving/artifacts.py, docs/design.md and "
+        "docs/explainability.md stops being hypothetical. It is survivable "
+        "TODAY only because a fresh TreeExplainer is built per request "
+        "(test_one_explainer_is_constructed_per_request above). If that test "
+        "has also been relaxed, the race is live. Measured: as `def`, two "
+        "concurrent calls overlap and buy no wall-clock -- the work is "
+        "CPU-bound. Do not widen this to keep a latency change green."
+    )
+    assert not _contains_await(route.endpoint), (
+        "/score now awaits something. It is still on the event loop, but it can "
+        "be suspended mid-request, so a second /score can start before the "
+        "first finishes -- the same interleaving a threadpool would give, "
+        "reached a different way. Whatever the new await is, it lands between "
+        "TreeExplainer.shap_values()'s write to expected_value and "
+        "_shap_matrix()'s read of it unless the explainer is still per-request."
+    )
 
 
 # ---------------------------------------------------------------------------

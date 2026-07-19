@@ -209,7 +209,7 @@ Five routes, and **two of them are absent from the production image on purpose**
 
 | Route | What it does | In the slim image? |
 |---|---|---|
-| `POST /score` | Scores one applicant into a decision plus rank-ordered reason codes, with the credit pull it was decided on | yes |
+| `POST /score` | Scores one applicant into a decision plus rank-ordered reason codes, with the credit pull it was decided on and a plain-language `explanation` rendered in code (`serving/render.py`, no model) | yes |
 | `GET /healthz` | Readiness, and the identity of what's loaded (`model_trained_at`, `calibrator_trained_at`, threshold) | yes |
 | `GET /calibrator` | The shipped isotonic calibrator's own knots and the real decision threshold, read off the bundle `/score` decides with | yes |
 | `POST /drift` | Turns `MockBureau`'s `mean_fico` and returns the **real** monitor's PSI/KS/alarms | **no — dev only** |

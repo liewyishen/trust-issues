@@ -175,6 +175,11 @@ credit system.
 
 ![Serving flow](docs/architecture-serving.png)
 
+> **The PNG above lags its source as of 2026-07-19.** `docs/architecture-serving.html` now reads
+> `POST /score — one applicant → one decision, explained twice`; the image still shows the older
+> `— one applicant → one decision`. Everything else in the image is current, including the
+> `ExplainedScoreResponse` box. Re-export with the page's own Export-as-PNG button to clear this.
+
 *[Interactive version](docs/architecture-serving.html) — same convention as the training diagram:
 every label cites the symbol it was verified under, and the page's Export-as-PNG button regenerates
 the image above.*
@@ -375,7 +380,7 @@ measured, nothing has reconciled them, and this sentence does not guess which is
 | **Metaflow** | Orchestrates the end-to-end flow (load → … → fairness) as a linear `FlowSpec` |
 | **SHAP** | `TreeExplainer` on the shipped booster, wrapped by `src/explain.py`: rank-ordered adverse-action reason codes whose contributions are the raw **log-odds margin**, declared as such in a `scale` field and in every key name. No probability-scale attribution is produced — see [`docs/explainability.md`](docs/explainability.md) §5. Called by `src/` and its tests, and wired into the Metaflow pipeline: the `explain` step logs global SHAP importance (mean absolute SHAP, log-odds) onto the `lgbm_production` run |
 | **FastAPI + Pydantic** | The HTTP boundary (`serving/`). Pydantic is the *request contract*, not decoration: closed enums, strict floats (`"700"` is a 422, not a coerced 700), and `extra="forbid"` — a client that submits its own `fico_n` is rejected, because a client that could set its own FICO could describe an applicant whose score never came from a bureau pull |
-| **React + TypeScript + Vite + Tailwind** | The frontend (`frontend/`). Talks to the live API and computes none of its own numbers — the model, the calibrator, the threshold, the drift monitor and the fairness audit are all read off the service. No charting library: the calibrator step function, the drift bars and the bootstrap intervals are hand-drawn SVG/CSS, so nothing is smoothed or interpolated into a curve the data doesn't have |
+| **React + TypeScript + Vite + Tailwind** | The frontend (`frontend/`). Talks to the live API and computes none of its own numbers — the model, the calibrator, the threshold, the drift monitor, the fairness audit and the plain-language explanation are all read off the service. No charting library: the calibrator step function, the drift bars and the bootstrap intervals are hand-drawn SVG/CSS, so nothing is smoothed or interpolated into a curve the data doesn't have |
 | **pytest** | 339 tests across the modeling and serving layers (101 of them in `tests/test_serving.py`) |
 
 ---

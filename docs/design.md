@@ -156,13 +156,20 @@ Constraints a serving design must answer, not defects to apologize for.
   `fico_n` to the bureau but left `dti_n` on the request; `_to_raw_frame()` takes
   `dti_n` from the request and leaves the pulled `report.dti_n` unused. The
   bureau sources one of the two credit fields today, by design, not both.
-- **Every decision is returned with the pull it was made on.** `ScoreResponse`
-  carries one nested `credit_report` key (`ScoredCreditReport`): the fetched
-  `fico_n` the booster actually scored on, plus the `bureau`, `fico_version` and
-  `pulled_at` identifying which pull supplied it. A decision made on a
-  bureau-sourced `fico_n` therefore ships both the value and the report's
-  identity — the provenance a real bureau integration would audit against, and
-  the datum needed to check the decision against it.
+- **Every decision is returned with the pull it was made on, and with its own
+  explanation.** `/score` returns `ExplainedScoreResponse` (`serving/schema.py`),
+  a **subclass** of `ScoreResponse`. From the base it carries one nested
+  `credit_report` key (`ScoredCreditReport`): the fetched `fico_n` the booster
+  actually scored on, plus the `bureau`, `fico_version` and `pulled_at`
+  identifying which pull supplied it. A decision made on a bureau-sourced
+  `fico_n` therefore ships both the value and the report's identity — the
+  provenance a real bureau integration would audit against, and the datum needed
+  to check the decision against it. The subclass adds exactly one field of its
+  own, `explanation`, rendered from the base's fields by `serving/render.py` —
+  pure code, no model. Putting it on the subclass rather than on `ScoreResponse`
+  is *why* `set(ScoreResponse.model_fields) == set(explain keys) |
+  {"credit_report"}` still holds untouched (`docs/data-decisions.md`): the
+  renderer's input never contains the renderer's own output.
 - **The pulled `dti_n` is absent from that block, deliberately.** `CreditReport`
   has a `dti_n`; the decision does not use it (`_to_raw_frame()` reads `dti_n`
   off the request). A "credit report" block showing a DTI the model never

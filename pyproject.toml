@@ -65,7 +65,9 @@ default-groups = ["dev", "training"]
 dev = [
     "ipykernel>=7.3.0",
     "jupyter>=1.1.1",
+    "mypy>=2.3.0",
     "pytest>=9.1.1",
+    "ruff>=0.15.22",
 ]
 # Training/notebook-only, verified against serving's actual import graph:
 # pipelines/training_flow.py imports metaflow; src/train.py imports mlflow
@@ -91,3 +93,109 @@ training = [
     "mlflow>=3.14.0",
     "seaborn>=0.13.2",
 ]
+
+# ---------------------------------------------------------------------------
+# ruff -- LINT ONLY. This repo deliberately does not use `ruff format`.
+#
+# That is a decision, not an omission, and the measurement behind it is worth
+# keeping: `ruff format` would rewrite 36 of 45 files and ~2374 lines. It is
+# not whitespace. It explodes hand-aligned literals one-item-per-line --
+# emp_order (features.py) is written as a readable 0..10 ladder in three rows
+# and comes back as eleven. `skip-magic-trailing-comma` does not rescue it
+# (~2386 lines, marginally worse): this repo's compact hand-wrapping is not
+# black-compatible in either direction. Trading that alignment, plus the git
+# blame of 36 files, for uniformity is a bad trade in a repo whose history IS
+# its documentation. If formatting is ever adopted it should be its own
+# deliberate commit, touching nothing else -- not a side effect of linting.
+#
+# `select` is ruff's DEFAULT (E4 import placement, E7 statement style, E9
+# syntax/IO errors, F pyflakes) plus I (import sorting). Two rule families
+# were considered and declined:
+#
+#   UP (pyupgrade) -- not this round. Nothing about it is objectionable; it
+#       simply has not been looked at yet, and rewriting syntax across a repo
+#       is not something to bundle into the commit that introduces linting.
+#
+#   PL* (pylint) -- NEVER, and this one is not a deferral. It is precisely
+#       the family that would come for the two deliberate constructions
+#       below.
+#
+# Rules this repo must NOT be "fixed" by, recorded here so the exemption is a
+# decision and not a later concession:
+#
+#   PLC0415 import-outside-top-level -- the /drift handler (app.py) imports
+#       scripts.demo_drift INSIDE the function body. Hoisting it to module
+#       scope puts mlflow + metaflow + pipelines into serving.app's import
+#       graph, which is what the [dependency-groups] split, the Dockerfile's
+#       COPY whitelist, and test_serving.py's subprocess import guard all
+#       exist to prevent -- the slim image would die at boot. The comment at
+#       that import says so at length.
+#
+#   PLR2004 magic-value-comparison / any "simplify to 0.25" suggestion --
+#       SELECTED_THRESHOLD (config.py) is 0.25000000000000006, which is
+#       np.arange(0.05, 0.95, 0.01)[20], the value the sweep actually chose,
+#       and it is NOT equal to 0.25. The comment above it carries the proof.
+#
+#   Any rule that would edit a line whose own comment calls it deliberate,
+#       deferred, or "not an oversight". There are 61 such self-declarations
+#       across src/ serving/ pipelines/ scripts/ (grep -niE
+#       "deliberat|on purpose|not an? (oversight|accident)"). They are the
+#       repo's record of decisions, and a linter has no standing to overturn
+#       one.
+[tool.ruff]
+target-version = "py311"
+# Measured, not defaulted-into: of the 6,000-odd lines in src/ serving/
+# pipelines/ scripts/, 442 exceed 79 chars, 49 exceed 88, and none exceeds
+# 120. 88 is where this code already lives.
+#
+# This does NOT enable the formatter -- see the header above. E501 is not
+# selected, so today this value is inert; it is kept because it records the
+# measured shape of the code and would be the right number if E501 is ever
+# turned on. Setting it is not an invitation to run `ruff format`.
+line-length = 88
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+# ---------------------------------------------------------------------------
+# mypy -- type check. NOT strict.
+#
+# The third-party overrides below silence 35 `import-untyped` errors -- the
+# un-stubbed scientific stack (pandas, sklearn, scipy, lightgbm, shap,
+# pandera, metaflow). Those errors say nothing about this repo's code; they
+# say those libraries ship no type information. Silencing them is what makes
+# the remaining errors readable.
+#
+# pandas-stubs would replace the pandas entry with real types. Deliberately
+# not installed this round: real stubs are strict enough to surface a fresh
+# batch of errors, which is its own decision and does not belong in the
+# commit that introduces type checking.
+#
+# namespace_packages + explicit_package_bases + mypy_path exist for ONE
+# reason: scripts/ has no __init__.py, on purpose. The /drift availability
+# probe (app.py) calls importlib.util.find_spec("scripts.demo_drift"), and
+# the absence of __init__.py is what makes importing the parent package
+# execute nothing -- the namespace-package note in test_serving.py documents
+# that nuance and the subprocess import guard depends on it. So mypy is
+# configured to TOLERATE the namespace package. Adding scripts/__init__.py to
+# make a type checker comfortable would change runtime import behaviour to
+# satisfy a tool, which is backwards.
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "serving", "pipelines", "scripts"]
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "."
+
+[[tool.mypy.overrides]]
+module = [
+    "pandas.*",
+    "sklearn.*",
+    "scipy.*",
+    "lightgbm.*",
+    "shap.*",
+    "pandera.*",
+    "metaflow.*",
+    "joblib.*",
+]
+ignore_missing_imports = true

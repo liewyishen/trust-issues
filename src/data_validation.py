@@ -35,8 +35,7 @@ Run the doctest:  python -m pytest --doctest-modules src/data_validation.py
 from __future__ import annotations
 
 import pandas as pd
-import pandera.pandas as pa
-from pandera.pandas import Column, Check, DataFrameSchema
+from pandera.pandas import Check, Column, DataFrameSchema
 
 # ---------------------------------------------------------------------------
 # Domain constants — every number here traces back to a specific EDA finding,

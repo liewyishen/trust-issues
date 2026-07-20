@@ -23,9 +23,9 @@ import pandas as pd
 import pytest
 
 from src.fairness import (
-    bootstrap_eo_ci,
     audit_layer1,
     audit_layer3_ablation,
+    bootstrap_eo_ci,
 )
 
 

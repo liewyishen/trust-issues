@@ -46,8 +46,8 @@ Hence: this renderer states NO quantity of risk factors. See _FACTORS_HEADER.
 
 from __future__ import annotations
 
-from src.explain import CONTRIBUTION_SCALE
 from serving.schema import ScoreResponse
+from src.explain import CONTRIBUTION_SCALE
 
 # Rendering precision. Rounding to a fixed number of places is a truthful
 # statement AT that precision -- "0.147" is a correct 3-place rendering of

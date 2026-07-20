@@ -64,6 +64,11 @@ import typing
 import pytest
 
 from serving.render import (
+    _DECISION_PHRASES,
+    _FACTORS_HEADER,
+    _FEATURE_PHRASES,
+    _SCALE_PHRASES,
+    _VALUE_PHRASES,
     CONTRIBUTION_PLACES,
     NOT_RENDERED_CREDIT_REPORT_FIELDS,
     NOT_RENDERED_FIELDS,
@@ -72,11 +77,6 @@ from serving.render import (
     RENDERED_FIELDS,
     VALUE_KEYED_FEATURES,
     RenderError,
-    _DECISION_PHRASES,
-    _FACTORS_HEADER,
-    _FEATURE_PHRASES,
-    _SCALE_PHRASES,
-    _VALUE_PHRASES,
     _first_out_of_order,
     explanation_fragments,
     render_explanation,

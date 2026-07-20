@@ -20,14 +20,14 @@ Run:  pytest tests/test_calibrate.py -v
 
 from __future__ import annotations
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
-import joblib
 
+from src.calibrate import apply_calibration, calibrate_model, load_calibrator
 from src.features import CATEGORICAL, FEATURES
 from src.model_io import train_lgb
-from src.calibrate import calibrate_model, apply_calibration, load_calibrator
 
 
 def _make_split(n, purposes, homes, states, emp_lengths, rng, base_default_rate=0.15):

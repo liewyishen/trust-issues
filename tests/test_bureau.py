@@ -34,9 +34,8 @@ from typing import get_args
 import pytest
 from pydantic import ValidationError
 
-from src.data_validation import DTI_MAX_REAL, DTI_SENTINEL, FICO_MAX, FICO_MIN
-
 from serving.bureau import CreditBureau, CreditReport, MockBureau
+from src.data_validation import DTI_MAX_REAL, DTI_SENTINEL, FICO_MAX, FICO_MIN
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -316,7 +315,7 @@ def test_determinism_holds_across_separate_processes():
 
     assert len(set(theirs.values())) == 1, (
         "MockBureau.fetch('applicant-0001') returned DIFFERENT reports under "
-        f"different PYTHONHASHSEEDs:\n"
+        "different PYTHONHASHSEEDs:\n"
         + "\n".join(f"  PYTHONHASHSEED={s}: {r}" for s, r in theirs.items())
         + "\n\nSomething on the path from applicant_id to the report is seeded "
         "off Python's built-in hash(), which is randomized per process. The same "

@@ -15,16 +15,16 @@ Run:  pytest tests/test_train.py -v
 
 from __future__ import annotations
 
+import joblib
+import mlflow
 import numpy as np
 import pandas as pd
 import pytest
-import joblib
-import mlflow
 
 import src.model_io as model_io_module
-from src.features import add_features, CATEGORICAL, FEATURES, TARGET
+from src.features import CATEGORICAL, FEATURES, TARGET, add_features
+from src.model_io import _x, _xy, load_model_artifact, train_lgb
 from src.train import train_and_save
-from src.model_io import train_lgb, load_model_artifact, _x, _xy
 
 
 def _make_split(n, purposes, homes, states, emp_lengths, rng):

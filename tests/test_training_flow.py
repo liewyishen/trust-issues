@@ -34,7 +34,6 @@ from pipelines.training_flow import (
 )
 from src.features import FEATURES
 
-
 # --- Structure -----------------------------------------------------------------
 
 def test_flow_is_a_flowspec():

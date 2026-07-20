@@ -44,7 +44,13 @@ import mlflow
 import pandas as pd
 
 from .features import CATEGORICAL, FEATURES
-from .model_io import DEFAULT_MODEL_DIR, LGB_PARAMS, PROJECT_ROOT, train_baseline, train_lgb
+from .model_io import (
+    DEFAULT_MODEL_DIR,
+    LGB_PARAMS,
+    PROJECT_ROOT,
+    train_baseline,
+    train_lgb,
+)
 
 # ---------------------------------------------------------------------------
 # MLflow tracking setup: SQLite backend, not the plain filesystem store.

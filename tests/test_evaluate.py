@@ -21,17 +21,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.features import TARGET
 from src.evaluate import (
-    total_profit,
+    INT_MARGIN,
+    LGD,
+    PROFIT_OBJECTIVE,
+    evaluate_at_threshold,
     pure_profit,
     regret_profit,
     select_threshold,
-    evaluate_at_threshold,
-    PROFIT_OBJECTIVE,
-    LGD,
-    INT_MARGIN,
+    total_profit,
 )
+from src.features import TARGET
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +220,8 @@ def test_total_profit_default_is_regret():
 
 def test_unknown_objective_raises():
     """A typo in the objective name fails closed, not silently to a default."""
-    loan_amt = np.array([1000.0]); y = np.array([0]); approved = np.array([True])
+    loan_amt = np.array([1000.0])
+    y = np.array([0])
+    approved = np.array([True])
     with pytest.raises(ValueError, match="Unknown profit objective"):
         total_profit(loan_amt, y, approved, objective="max_vibes")

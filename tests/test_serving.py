@@ -122,13 +122,16 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
-import joblib
 import shap
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+
+import serving.app
+import src.explain as src_explain
 
 # The drift monitor's OWN thresholds. Imported, never retyped -- the tests below
 # assert "over / under the line the monitor actually uses", which is the same
@@ -136,8 +139,42 @@ from fastapi.testclient import TestClient
 # second copy of the alarm rule inside the test that exists to prove there is
 # only one.
 from pipelines.drift_check import DEFAULT_ALARM_THRESHOLDS
-import src.explain as src_explain
+from serving.app import DRIFT_DEMO_AVAILABLE, create_app
+from serving.artifacts import load_bundle
+
+# CreditBureau is imported and never called, deliberately. It is the Protocol
+# the numbered contract items above name in prose -- "fico_n comes from
+# CreditBureau.fetch(applicant_id), not from the request" appears twice up
+# there -- and deleting the import to satisfy F401 would leave those sentences
+# pointing at a symbol this file does not import. The import is what keeps the
+# prose checkable: if the Protocol is ever renamed, this line fails to resolve
+# and the sentences get found. noqa, not removal.
+from serving.bureau import CreditBureau, CreditReport, MockBureau  # noqa: F401
+from serving.config import FAIRNESS_AUDIT_PATH, SELECTED_THRESHOLD
+from serving.fairness import (
+    FairnessAudit,
+    audit_model_trained_at,
+    is_stale,
+    load_fairness_audit,
+)
+from serving.render import (
+    NOT_RENDERED_FIELDS,
+    RENDERED_FIELDS,
+    RenderError,
+    render_explanation,
+)
+from serving.schema import (
+    EMP_LENGTH_NOT_DISCLOSED,
+    VALID_EMP_LENGTH,
+    ExplainedScoreResponse,
+    ScoredCreditReport,
+    ScoreRequest,
+    ScoreResponse,
+)
+from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
 from src.data_validation import FICO_MAX, FICO_MIN, VALID_HOME_OWNERSHIP, VALID_PURPOSE
+from src.explain import DEFAULT_EXPLAIN_THRESHOLD, explain_applicants
+
 # The fairness audit's OWN constants -- the 0.80 rule, the bootstrap count, the
 # ablation's deliberately-not-the-operating-point threshold. Imported, never
 # retyped, for the same reason DEFAULT_ALARM_THRESHOLDS is: a hardcoded 0.80
@@ -151,36 +188,8 @@ from src.fairness import (
     SWEEP_THRESHOLDS,
     WATCH_STATES,
 )
-from src.features import CATEGORICAL, FEATURES, TARGET, emp_order
-from src.model_io import _x, load_model_artifact, train_lgb
-from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
-from src.explain import DEFAULT_EXPLAIN_THRESHOLD, explain_applicants
-
-import serving.app
-from serving.app import DRIFT_DEMO_AVAILABLE, create_app
-from serving.artifacts import load_bundle
-from serving.bureau import CreditBureau, CreditReport, MockBureau
-from serving.config import FAIRNESS_AUDIT_PATH, SELECTED_THRESHOLD
-from serving.render import (
-    NOT_RENDERED_FIELDS,
-    RENDERED_FIELDS,
-    RenderError,
-    render_explanation,
-)
-from serving.fairness import (
-    FairnessAudit,
-    audit_model_trained_at,
-    is_stale,
-    load_fairness_audit,
-)
-from serving.schema import (
-    EMP_LENGTH_NOT_DISCLOSED,
-    ExplainedScoreResponse,
-    VALID_EMP_LENGTH,
-    ScoredCreditReport,
-    ScoreRequest,
-    ScoreResponse,
-)
+from src.features import CATEGORICAL, FEATURES
+from src.model_io import _x, train_lgb
 
 REASON_CODE_KEYS = {"rank", "feature", "value", "contribution_log_odds"}
 

@@ -13,13 +13,12 @@ Run:  pytest tests/test_data_validation.py -v
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 import pandera.errors as pa_errors
+import pytest
 
 from src.data_validation import (
-    validate_loan_data,
-    LOAN_SCHEMA,
     DTI_SENTINEL,
+    validate_loan_data,
 )
 
 

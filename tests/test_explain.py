@@ -35,14 +35,12 @@ Run:  pytest tests/test_explain.py -v
 
 from __future__ import annotations
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
-import joblib
 from scipy.special import expit
 
-from src.features import CATEGORICAL, FEATURES, TARGET
-from src.model_io import _to_lgb_frame, _x, load_model_artifact, train_lgb
 from src.calibrate import DEFAULT_MODEL_PATH, calibrate_model
 from src.explain import (
     ADDITIVITY_ATOL,
@@ -53,6 +51,8 @@ from src.explain import (
     explain_applicants,
     global_importance,
 )
+from src.features import CATEGORICAL, FEATURES, TARGET
+from src.model_io import _to_lgb_frame, _x, load_model_artifact, train_lgb
 
 # The exact float evaluate.select_threshold() returns on the real dataset:
 # np.arange(0.05, 0.95, 0.01)[20], logged by MLflow run cca4c361 as

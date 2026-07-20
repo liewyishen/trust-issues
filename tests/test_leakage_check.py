@@ -16,13 +16,13 @@ import pandas as pd
 import pytest
 
 from src.leakage_check import (
+    DEFAULT_FORBIDDEN,
     check_forbidden_features,
-    prove_forbidden_absent,
+    check_single_feature_auc,
     check_temporal_consistency,
     flag_suspicious_auc,
+    prove_forbidden_absent,
     single_feature_aucs,
-    check_single_feature_auc,
-    DEFAULT_FORBIDDEN,
 )
 
 

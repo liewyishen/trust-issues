@@ -1574,8 +1574,9 @@ the false claim the same way. It adds no collected item, so the count stays 302.
 ImportError`, and something equivalent must hold for `shap`/`IPython` or the image could
 not boot. That tolerance was verified here at today's pinned versions and **nothing
 watches it**. Any upgrade can turn a guarded import into an unguarded one, and the failure
-would appear as a container that dies at boot -- in a repo with no CI, no scheduler and no
-automated `docker build` (`docs/design.md` §4), that means it appears in front of whoever
+would appear as a container that dies at boot -- in a repo with no scheduler and no
+automated `docker build` (`docs/design.md` §4), and with a CI that builds no image
+(`.github/workflows/ci.yml`), that means it appears in front of whoever
 runs the image next. The check is cheap and, unlike the rejected allowlist, **derivable
 rather than hand-maintained**: the set is `graph - (uv export --no-dev --no-group
 training)`, both sides computable, and the assertion is `import serving.app` under a

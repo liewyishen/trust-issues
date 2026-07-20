@@ -1,0 +1,165 @@
+# CI -- ruff, mypy and the test suite. Python 3.11 only.
+#
+# Scope is deliberately narrow for a first version: the Python toolchain and
+# nothing else. frontend/ is TypeScript with its own toolchain and is not
+# checked here. That is a deferral, not an oversight.
+#
+# Nothing here runs training, the fairness audit or the drift check. All three
+# read data/*.csv -- 167 MB, gitignored on purpose -- so on a fresh checkout
+# they cannot pass, and a permanently red job is a job people learn to ignore.
+# The 340 tests are contract tests and need no dataset.
+#
+# ---------------------------------------------------------------------------
+# WHAT THIS FILE DELIBERATELY DOES NOT RESTATE
+#
+# This repo's standing rule is that one fact lives in one place. A CI file is
+# where that rule usually breaks, because it arrives as a fresh copy of every
+# command, path and version in the project, and then drifts from the originals
+# quietly. So each step below defers to the file that already holds the
+# decision instead of repeating it:
+#
+#   Python version    -> .python-version (3.11), which uv reads on its own.
+#                        NOT restated as a `python-version:` key, and no
+#                        version matrix: this project is pinned to 3.11
+#                        (requires-python, the README badge), so a matrix would
+#                        spend most of its time proving things about versions
+#                        the project never claimed to support.
+#
+#   Which paths ruff  -> pyproject.toml [tool.ruff] extend-exclude. That is why
+#   checks               the step below is `ruff check .` and not a directory
+#                        list: enumerating them here would put the notebooks/
+#                        exclusion in a second place, free to disagree with the
+#                        first.
+#
+#   Which groups get  -> pyproject.toml [tool.uv] default-groups. `uv sync
+#   installed            --frozen` is what a developer runs; CI runs the same
+#                        thing rather than a hand-tuned subset.
+#
+#   MLflow telemetry  -> tests/conftest.py, which sets MLFLOW_DISABLE_TELEMETRY
+#                        at module scope. Deliberately NOT set again here. It
+#                        would be a second copy of the decision, and a harmful
+#                        one: it would silence on CI a call that still leaves a
+#                        laptop, turning a guard that fails loudly everywhere
+#                        into one that only fails where nobody is looking.
+#
+# ---------------------------------------------------------------------------
+# THE NETWORK GUARD IS LEFT FREE TO FIRE
+#
+# tests/conftest.py patches socket.connect and fails the run if the suite opens
+# any outbound connection, recording violations from background threads that a
+# raise alone would not catch. GitHub's runners have working egress, so if
+# anything phones home the build goes red with the address, the thread and the
+# first-party frame printed. That is the intended behaviour. No environment
+# variable is set in this file to pre-empt it, and no step swallows its output.
+# Verified green on a fresh clone before this file was written.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+# A second push to the same PR makes the first run's answer irrelevant. Cancel
+# it rather than paying for an answer about a commit nobody will merge.
+# `github.ref` on main is unique per branch, so pushes to main queue normally.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Three separate jobs, not three steps in one. A lint failure, a type
+  # failure and a test failure are different kinds of problem, and this repo
+  # keeps different gates visibly apart. Separate jobs run in parallel and give
+  # the pull request three independent ticks, so a red one names itself without
+  # anyone opening a log.
+  #
+  # The cost, stated: each job pays for its own checkout and dependency install.
+  # That is accepted rather than worked around -- see the install note in the
+  # mypy job for why a lighter install is not available to all three anyway.
+
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # `ruff check .`, exactly as README's Setup section and pyproject record
+      # it. Lint only: this repo does not run `ruff format`, and that decision
+      # has a written argument in pyproject.toml's [tool.ruff] header. CI does
+      # not get to reopen it by adding a `ruff format --check` step here.
+      - name: Lint
+        run: uv run --frozen ruff check .
+
+  mypy:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # The full sync, including the training group, and that is not laziness.
+      # Measured: with `--no-group training`, mypy reports 3 import-not-found
+      # errors for mlflow (src/train.py, pipelines/training_flow.py,
+      # pipelines/drift_check.py). mlflow is absent from the
+      # ignore_missing_imports override list in pyproject.toml because it ships
+      # real type information -- which only helps when it is installed.
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Target list copied from nowhere: it is the same string in README's
+      # Setup section and in pyproject.toml's [tool.mypy] files key.
+      - name: Type check
+        run: uv run --frozen mypy src serving pipelines scripts
+
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # The whole suite, with NO selection flags -- no -k, no -m, no
+      # --deselect, no file path, no --lf. This is a hard constraint, not a
+      # preference. tests/test_readme.py binds README's stated test count to the
+      # live collection, and _run_is_narrowed() makes it SKIP ITSELF the moment
+      # it detects any of those flags. Narrowing the run here would leave the
+      # tick green while quietly retiring the invariant behind it, which is the
+      # precise shape of unearned green this repo exists to refuse.
+      #
+      # -rs rather than -q, so the log carries two numbers a reader would
+      # otherwise have to assume:
+      #
+      #   `collected 340 items` in the header -- proof the suite ran whole, and
+      #   the same number test_readme.py checks README against.
+      #
+      #   every skip, with its reason. This matters on a fresh checkout:
+      #   models/*.pkl is gitignored (regenerated by training, never committed),
+      #   so 12 tests that load the shipped artifact skip here that pass on a
+      #   developer's machine. A green tick alone would not say so. The log
+      #   must, because "green" and "green with twelve tests that never ran"
+      #   are different claims and only one of them is true here.
+      - name: Test
+        run: uv run --frozen pytest -rs

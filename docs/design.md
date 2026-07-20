@@ -100,8 +100,9 @@ Depth: [`data-decisions.md`](data-decisions.md) (data quality, fairness);
   the image is still safe — LightGBM guards that import (`try` / `except ImportError`,
   setting `MATPLOTLIB_INSTALLED = False`), so it degrades instead of failing. The accurate
   claim is **tolerated, not unreached**, and the two are not the same sentence.
-- **`drift_check.py` is a manual entry point**, not a scheduled job — no CI, no cron,
-  no scheduler exists here. It reports; it does not raise (`fail_on_alarm=False`).
+- **`drift_check.py` is a manual entry point**, not a scheduled job — no cron, no
+  scheduler exists here, and the CI that does exist does not run it: it needs the 167 MB
+  dataset that never ships. It reports; it does not raise (`fail_on_alarm=False`).
 - **`SHAP_SAMPLE_N = 4000`** is inherited from the notebook, with no stated rationale
   (`src/explain.py`'s `SHAP_SAMPLE_N` constant). The `explain` step now logs it as the
   `shap_sample_n` param;

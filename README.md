@@ -1,5 +1,6 @@
 # trust-issues
 
+[![CI](https://github.com/liewyishen/trust-issues/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/liewyishen/trust-issues/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11-blue.svg)
 ![Tests](https://img.shields.io/badge/tests-340%20passing-brightgreen.svg)
 ![Model](https://img.shields.io/badge/model-LightGBM-orange.svg)

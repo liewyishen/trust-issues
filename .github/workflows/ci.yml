@@ -1,8 +1,16 @@
-# CI -- ruff, mypy and the test suite. Python 3.11 only.
+# CI -- ruff, mypy, the test suite, and the frontend build. Python 3.11, Node 24.
 #
-# Scope is deliberately narrow for a first version: the Python toolchain and
-# nothing else. frontend/ is TypeScript with its own toolchain and is not
-# checked here. That is a deferral, not an oversight.
+# This file used to say frontend/ was not checked here, and that it was a
+# deferral rather than an oversight. The deferral is now partly redeemed: a
+# fourth job builds frontend/, which type checks it (`tsc -b`) and bundles it
+# (`vite build`) in one command.
+#
+# What is still not checked there is lint, and the shape of that gap is worth
+# naming rather than leaving as a blank. frontend/ is not lint-free by
+# omission: oxlint is in its devDependencies, .oxlintrc.json configures it with
+# three plugins and two rules, and it exits 0 today. It is simply wired to
+# nothing -- no npm script calls it, and so neither can this file. Installed,
+# configured, passing, and guarding nothing. Connecting it is its own change.
 #
 # Nothing here runs training, the fairness audit or the drift check. All three
 # read data/*.csv -- 167 MB, gitignored on purpose -- so on a fresh checkout
@@ -33,7 +41,21 @@
 #
 #   Which groups get  -> pyproject.toml [tool.uv] default-groups. `uv sync
 #   installed            --frozen` is what a developer runs; CI runs the same
-#                        thing rather than a hand-tuned subset.
+#                        thing rather than a hand-tuned subset. All four jobs
+#                        use that one command, including the frontend job,
+#                        which needs far less -- see the note on its install
+#                        step for why it is not trimmed anyway.
+#
+#   Node version      -> frontend/.nvmrc (24), which setup-node reads and so
+#                        does a developer's `nvm use`. NOT restated as a
+#                        `node-version:` key here, and deliberately not written
+#                        as a package.json `engines` range: that would be a
+#                        second copy of vite's own engines constraint, free to
+#                        disagree with it as vite moves, and it would assert
+#                        support for Node 20.19 -- vite's floor, never run
+#                        against this frontend, and end-of-life since April
+#                        2026. The line, not the patch, for the same reason
+#                        .python-version says 3.11 and not 3.11.9.
 #
 #   MLflow telemetry  -> tests/conftest.py, which sets MLFLOW_DISABLE_TELEMETRY
 #                        at module scope. Deliberately NOT set again here. It
@@ -74,11 +96,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Three separate jobs, not three steps in one. A lint failure, a type
-  # failure and a test failure are different kinds of problem, and this repo
-  # keeps different gates visibly apart. Separate jobs run in parallel and give
-  # the pull request three independent ticks, so a red one names itself without
-  # anyone opening a log.
+  # Four separate jobs, not four steps in one. A lint failure, a type failure,
+  # a test failure and a frontend build failure are different kinds of problem,
+  # and this repo keeps different gates visibly apart. Separate jobs run in
+  # parallel and give the pull request four independent ticks, so a red one
+  # names itself without anyone opening a log.
   #
   # The cost, stated: each job pays for its own checkout and dependency install.
   # That is accepted rather than worked around -- see the install note in the
@@ -163,3 +185,67 @@ jobs:
       #   are different claims and only one of them is true here.
       - name: Test
         run: uv run --frozen pytest -rs
+
+  # The frontend job needs BOTH toolchains, which is the one thing about it a
+  # reader would not predict. `npm run build` fires package.json's `prebuild`,
+  # which runs `gen:enums`, which is
+  # `cd .. && uv run python frontend/scripts/generate-enums.py`. That script
+  # imports serving.schema, src.data_validation and src.features to read the
+  # real enum sets out of Python and write frontend/src/lib/enums.generated.ts,
+  # so the dropdowns cannot drift from what the API will accept.
+  #
+  # So a Node-only job does not half-work here, it dies: measured on a clean
+  # checkout with uv removed from PATH, `npm run build` exits 127 at prebuild
+  # and never reaches tsc or vite -- no dist/ at all. Loud, which is the good
+  # version of this. The Python install below is load-bearing, not incidental.
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v7
+        with:
+          # The version lives in frontend/.nvmrc and is read from there, not
+          # written again here. npm's cache keys off the lockfile, which is in
+          # frontend/ rather than at the root, so the path has to be named.
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # The same `uv sync --frozen` as the other three, and it installs far
+      # more than this job uses: the generator's import chain bottoms out at
+      # pydantic, pandas and pandera, all of them [project] dependencies, so
+      # `--no-dev --no-group training` covers it -- measured, 36 packages
+      # against 193.
+      #
+      # Not trimmed anyway, on purpose, and the reason is worth leaving here
+      # because the trim looks free and is not. `uv run` re-syncs to
+      # default-groups before it runs anything, and gen:enums calls plain
+      # `uv run`. Measured: after a 36-package trimmed sync, one `uv run` puts
+      # the environment back to 193. Making the trim stick needs UV_NO_SYNC=1
+      # set alongside it, and those two must then stay paired forever -- delete
+      # either half and the trim silently stops trimming. That is a mechanism
+      # to maintain in exchange for seconds on a job whose environment is
+      # discarded when it finishes. The serving image trims because its size
+      # ships; this does not.
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      # `npm ci`, not `npm install`: it installs the lockfile exactly and fails
+      # if package.json and package-lock.json disagree, rather than resolving
+      # something new and quietly writing down what it chose.
+      - name: Install Node dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # One command, two gates: `tsc -b` type checks and `vite build` bundles,
+      # and either failing fails the step. Nothing here serves or previews the
+      # result -- this job answers "does it still build", not "does it work".
+      - name: Build
+        working-directory: frontend
+        run: npm run build

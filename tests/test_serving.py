@@ -1792,6 +1792,15 @@ def test_the_sweep_contains_the_operating_point_exactly_not_nearly(fairness_clie
 #     boundary could break: that the served string is the one render_explanation
 #     produces, that it cannot be obtained without the decision, and that the
 #     two invariants folding it in could have cost are still intact.
+#
+#     WHAT THIS SECTION DOES NOT COVER: the browser. These tests end at the
+#     wire. Nothing here -- and nothing anywhere in this suite -- asserts that
+#     frontend/ DISPLAYS the served string unmodified; a `.replace()` added to
+#     PlainLanguageNotice (DecisionResult.tsx) would leave every test in this
+#     file green. That gap is deliberate and its reasoning is written down in
+#     frontend/README.md, "No TypeScript test runner". Said explicitly because
+#     "the verbatim contract is guarded Python-side" is the natural misreading
+#     of this section, and it has already been made once.
 # ---------------------------------------------------------------------------
 def test_score_serves_the_rendered_explanation(client):
     """The route adds nothing. Byte-equality against the renderer called

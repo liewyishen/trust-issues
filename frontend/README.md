@@ -221,6 +221,50 @@ Consequence worth knowing: `npm run dev` shells out to `uv run python`, so the r
 environment must be installed. Not a burden in practice — this UI is useless without the API,
 which needs that environment anyway.
 
+## No TypeScript test runner
+
+There is no Vitest, no Jest, no jsdom, no testing-library. `npm run build`
+(`tsc -b && vite build`) is the only automated check this package has. That is a
+decision, not a gap that nobody got to, and it is written here because an
+enforced-or-refused convention that lives only in someone's head is not a
+convention.
+
+**What is guarded, and where.** The rendered explanation is pinned on the Python
+side by 29 tests in `tests/test_render.py` (every feature has a phrase, the
+output contains every required fragment in order, no phrase asserts a cause) and
+by `tests/test_serving.py`'s section 18, which asserts byte-equality between
+what `/score` puts on the wire and what `render_explanation()` produces.
+
+**What is not guarded, and this is the honest half.** Those tests end at the
+wire. Nothing asserts that this client *displays* the string unmodified. Add a
+`.replace()` or a `.split("\n").map(...)` to `PlainLanguageNotice`
+(`src/components/DecisionResult.tsx`) and the entire Python suite stays green,
+because `tsc -b` type-checks shapes and cannot see what a component does to a
+`string` on its way to the DOM.
+
+**Why the harness is still refused.** Closing that gap needs a DOM — Vitest plus
+jsdom or happy-dom plus testing-library, their config, and their place in the
+dependency tree — to make one assertion about a component whose entire body is
+`<pre>{text}</pre>`. That is the same trade as declining Evidently for the drift
+monitor: four scalar signals did not justify a web-server-and-telemetry
+dependency footprint (`docs/data-decisions.md`, "Hand-rolled PSI + scipy KS").
+A toolchain is priced against what it buys, and here it buys one assertion over
+one interpolation.
+
+**What would reopen this.** The refusal holds only while the frontend's handling
+of backend strings stays at zero logic. It stops holding the moment
+`PlainLanguageNotice` — or anything else — parses, splits, reflows, truncates or
+conditionally renders part of a served string, because at that point there is
+real behavior to test and `tsc -b` will not see any of it. The condition is not
+"the frontend gets bigger"; it is "the frontend starts doing something to a
+string it currently only passes through."
+
+Until then the contract is held by code review and by the comment at the top of
+section 18 in `tests/test_serving.py`, which says what that section does not
+cover. Both are weaker than a test. Neither is nothing, and both are cheaper
+than the alternative — which is the whole argument, stated so it can be
+disagreed with.
+
 ## What the UI enforces, and what it does not
 
 The form renders `purpose`, `home_ownership_n` and `emp_length` as **dropdowns**, so an

@@ -154,6 +154,20 @@ target-version = "py311"
 # turned on. Setting it is not an invitation to run `ruff format`.
 line-length = 88
 
+# notebooks/ is not linted. The cost is real and small: analysis.ipynb carries
+# a handful of unsorted import blocks and one empty f-string that will now go
+# uncaught. It is worth paying because the alternative is worse -- without this
+# line the repo's lint command is `ruff check src serving pipelines scripts
+# tests`, a string nobody remembers, and `ruff check .` stays permanently red.
+# A lint command that never passes is a lint command nobody runs. The decision
+# to skip the notebook belongs in this file, where it is visible and revocable
+# in one line, not in whichever command a contributor happens to have copied.
+#
+# What makes it affordable: no production logic lives in the notebook. The
+# modeling code moved into src/ long ago and the notebook is exploratory
+# analysis over it, so nothing here is the only copy of anything.
+extend-exclude = ["notebooks/"]
+
 [tool.ruff.lint]
 extend-select = ["I"]
 

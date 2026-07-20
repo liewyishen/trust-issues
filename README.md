@@ -377,6 +377,8 @@ measured, nothing has reconciled them, and this sentence does not guess which is
 | **FastAPI + Pydantic** | The HTTP boundary (`serving/`). Pydantic is the *request contract*, not decoration: closed enums, strict floats (`"700"` is a 422, not a coerced 700), and `extra="forbid"` — a client that submits its own `fico_n` is rejected, because a client that could set its own FICO could describe an applicant whose score never came from a bureau pull |
 | **React + TypeScript + Vite + Tailwind** | The frontend (`frontend/`). Talks to the live API and computes no number describing the applicant — the model, the calibrator, the threshold, the drift monitor, the fairness audit and the plain-language explanation are all read off the service. No charting library: the calibrator step function, the drift bars and the bootstrap intervals are hand-drawn SVG/CSS, so nothing is smoothed or interpolated into a curve the data doesn't have |
 | **pytest** | 340 tests across the modeling and serving layers (102 of them in `tests/test_serving.py`) |
+| **Ruff** | Lint, and **deliberately not format**. `ruff format` would reflow hand-aligned literals — `emp_order`'s 0–10 ladder collapses into one entry per line — and rewrite most of the repo for a uniformity that costs the git blame of files whose history *is* their documentation. The measurement behind that call, and the rule families kept off because they would come for deliberate constructions (`/drift`'s in-handler import, `SELECTED_THRESHOLD`'s exact float), are recorded once in `pyproject.toml`'s `[tool.ruff]` comment rather than repeated here. It is run by hand: nothing in this repo enforces it, for the same reason nothing rechecks the image numbers above — there is no CI |
+| **mypy** | Non-strict type check over `src/` `serving/` `pipelines/` `scripts/`. Where a runtime `raise` already enforces a contract the checker cannot see — `/fairness`'s 404 guard, `explain_applicants()`'s all-or-none escape hatch — the annotation stays honest about the unguarded type and the call carries a `type: ignore` with its error code and a reason. Never an `assert` or a `cast`: both would restate the guarantee in a place that checks nothing, and the `raise` is the thing that actually fails closed. Libraries that ship no types are silenced per module, not globally. Manual, like the linter |
 
 ---
 
@@ -385,6 +387,8 @@ measured, nothing has reconciled them, and this sentence does not guess which is
 ```bash
 uv sync                                              # install dependencies
 uv run pytest                                        # run the test suite (340 passing)
+uv run ruff check .                                  # lint -- never formats, see pyproject.toml
+uv run mypy src serving pipelines scripts            # type check
 uv run python pipelines/training_flow.py run         # end-to-end training pipeline
 uv run python pipelines/drift_check.py               # yearly input-drift check on dti_n
 uv run python scripts/audit_fairness.py              # re-run the fairness audit -> models/fairness_audit.json

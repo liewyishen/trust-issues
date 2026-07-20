@@ -304,8 +304,15 @@ and each renders as itself:
   detail is rendered field by field, so a bad value points at the field that produced it.
 - **503** — the service never finished loading its artifacts. It refuses to serve rather than
   score with something it could not verify at startup.
-- **500** — the additivity guard failed: the explanation did not reconstruct the score, so
-  the service returned no decision at all.
+- **500** — the service returned no result. Two shapes reach here and this client shows the
+  difference rather than guessing past it: the additivity guard's refusal is an
+  `HTTPException` and arrives as JSON with the service's own sentence, which is displayed
+  verbatim; every other 500 (a `RenderError` from the explanation renderer, a lazy-import
+  failure in `/drift`, an unhandled bug anywhere) is Starlette's default handler and arrives
+  as plain text with no detail at all, and is reported as exactly that. This used to
+  substitute the additivity wording for a *missing* detail, so an unrelated failure on any of
+  the four routes rendering `Failure` claimed the contributions had not reconstructed a score
+  — a specific, wrong cause. A missing detail is information; it is no longer filled in.
 
 ## The calibrator, drawn
 

@@ -164,6 +164,7 @@ from serving.config import FAIRNESS_AUDIT_PATH, SELECTED_THRESHOLD
 from serving.render import (
     NOT_RENDERED_FIELDS,
     RENDERED_FIELDS,
+    RenderError,
     render_explanation,
 )
 from serving.fairness import (
@@ -681,6 +682,47 @@ def test_without_the_guard_the_same_corruption_returns_a_wrong_decision(client, 
     response = client.post("/score", json=GOOD)
     assert response.status_code == 200
     assert response.json()["raw_margin_log_odds"] == pytest.approx(clean + 1.0)
+
+
+def test_a_non_additivity_500_carries_no_json_detail(bundle, bureau, monkeypatch):
+    """
+    There are TWO 500 shapes on this service and the difference is the only
+    thing a client can honestly switch on.
+
+    app.py's HTTPException is the ONLY explicit 500 in serving/ -- it answers
+    application/json with a `detail` sentence. Every other 500 reaches
+    Starlette's default handler instead and answers text/plain "Internal Server
+    Error" with no JSON at all: RenderError from render_explanation (raised
+    OUTSIDE that try block, deliberately -- see the comment at the return in
+    score()), a lazy-import failure in /drift, an unhandled bug in any of the
+    five routes.
+
+    frontend/src/lib/api.ts switches on exactly this, which is why the shape is
+    pinned here rather than left to hold by accident. It is NOT proof of cause:
+    a second explicit HTTPException(500, detail=...) added to serving/ would
+    also carry a detail, and this test would still pass. That is why the client
+    shows the backend's own sentence rather than a cause of its own -- the
+    sentence is written where the raise is, and travels with it.
+
+    Needs its own TestClient: the `client` fixture leaves raise_server_exceptions
+    at its default, so an UNCAUGHT exception propagates to the caller instead of
+    becoming the response a browser would receive.
+    """
+
+    def _refuse(_response):
+        raise RenderError("no approved phrase -- the renderer refused to guess")
+
+    monkeypatch.setattr(serving.app, "render_explanation", _refuse)
+
+    with TestClient(
+        create_app(bundle=bundle, bureau=bureau), raise_server_exceptions=False
+    ) as unguarded:
+        response = unguarded.post("/score", json=GOOD)
+
+    assert response.status_code == 500
+    assert "application/json" not in response.headers.get("content-type", "")
+    with pytest.raises(ValueError):
+        response.json()
 
 
 # ---------------------------------------------------------------------------

@@ -8,14 +8,37 @@ The error taxonomy, and why each failure lands where it does.
 
       `emp_length: null` is NOT in this class. It is a 200. See ScoreRequest.
 
-500 -- the request was fine and the MODEL is not. One case matters:
-      _assert_additivity raising ValueError (explain.py) because
-      base + sum(contributions) does not reconstruct the booster's raw margin
-      to within ADDITIVITY_ATOL = 1e-9 (explain.py). The applicant did
-      nothing wrong; the explanation does not reconstruct the score. It must
-      not be downgraded to a warning and it must not return a decision without
-      an explanation. Fail closed, log the guard's full message, return a body
-      that leaks none of it.
+500 -- the request was fine and the MODEL is not. TWO SHAPES, and the
+      difference is what a client can honestly switch on.
+
+      ONE case is handled here: _assert_additivity raising ValueError
+      (explain.py) because base + sum(contributions) does not reconstruct the
+      booster's raw margin to within ADDITIVITY_ATOL = 1e-9 (explain.py). The
+      applicant did nothing wrong; the explanation does not reconstruct the
+      score. It must not be downgraded to a warning and it must not return a
+      decision without an explanation. Fail closed, log the guard's full
+      message, return a body that leaks none of it. That HTTPException is the
+      only explicit 500 in serving/, and it answers application/json with a
+      `detail`.
+
+      EVERY OTHER 500 is unhandled, on purpose, and reaches Starlette's
+      default handler: text/plain "Internal Server Error", no JSON, no detail.
+      RenderError from render_explanation is the reachable one -- score()
+      calls it OUTSIDE the try above, deliberately, because a renderer that
+      cannot vouch for its prose must not have the failure swallowed into a
+      decision served without one. A lazy-import failure in /drift and any
+      unhandled bug in any of the five routes land the same way.
+
+      The asymmetry IS the contract. A detail proves the service chose to say
+      something; its ABSENCE is the only thing distinguishing the two shapes,
+      so a client must not substitute a default sentence for a missing one --
+      doing that is what made frontend/ report the additivity guard for
+      failures that were not additivity. Pinned by test_serving.py::
+      test_a_non_additivity_500_carries_no_json_detail. Note what it does NOT
+      prove: a second explicit HTTPException(500, detail=...) added here would
+      also carry a detail and would be indistinguishable from this one. If one
+      is ever added, the client cannot tell them apart and the sentence at the
+      raise is the only thing that will reach a reader -- write it there.
 
       A CreditBureau.fetch() failure is NOT handled here -- deliberately, not
       by oversight. MockBureau (the only implementation wired in today)

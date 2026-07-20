@@ -1,6 +1,6 @@
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
-  AdditivityError,
+  InternalServerError,
   NetworkError,
   RouteNotAvailableError,
   ServiceUnavailableError,
@@ -53,14 +53,24 @@ export function Failure({ error }: { error: unknown }) {
     )
   }
 
-  if (error instanceof AdditivityError) {
+  if (error instanceof InternalServerError) {
+    // Two shapes, and this component can tell them apart but cannot tell WHY
+    // either happened. It used to name the additivity guard for both, on all
+    // four routes that render this component -- so an unhandled failure in
+    // /fairness reported that the contributions had not reconstructed a score.
+    // The service's own sentence is shown when there is one, because it was
+    // written at the raise and travels with it; when there is none, this says
+    // so rather than supplying a cause it cannot prove.
     return (
       <Alert variant="invalid">
-        <AlertTitle>500 — the explanation failed its consistency check</AlertTitle>
+        <AlertTitle>500 — the service returned no result</AlertTitle>
         <AlertDescription>
-          {error.detail} The contributions did not reconstruct the model's own score, so the
-          service refused to return a decision at all. A decision without a valid explanation is
-          worse than no decision.
+          {error.detail ?? (
+            <>
+              The service failed and said nothing further. Nothing was returned, which is the
+              intended posture: a result the service could not stand behind is worse than none.
+            </>
+          )}
         </AlertDescription>
       </Alert>
     )

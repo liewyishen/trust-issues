@@ -318,11 +318,26 @@ export class ServiceUnavailableError extends Error {
   }
 }
 
-export class AdditivityError extends Error {
-  detail: string
-  constructor(detail: string) {
-    super(detail)
-    this.name = "AdditivityError"
+/** A 500. NOT necessarily the additivity guard -- this class used to be called
+ *  AdditivityError, and every 500 from every route was constructed as one, so a
+ *  renderer refusal on /score and an unhandled bug in /fairness both reached the
+ *  screen wearing "the contributions did not reconstruct the model's own score".
+ *
+ *  `detail` is the sentence the SERVICE wrote, or null when it wrote none.
+ *  serving/app.py's HTTPException is the only explicit 500 in serving/ and it
+ *  answers JSON with a detail; every other 500 is Starlette's default handler
+ *  answering text/plain, which res.json() cannot parse. Pinned by
+ *  tests/test_serving.py::test_a_non_additivity_500_carries_no_json_detail.
+ *
+ *  A detail proves the service chose to say something. It does NOT prove WHICH
+ *  guard said it, and this client no longer claims to know -- it shows the
+ *  sentence and stops, the same posture PlainLanguageNotice takes toward the
+ *  rendered explanation. */
+export class InternalServerError extends Error {
+  detail: string | null
+  constructor(detail: string | null) {
+    super(detail ?? "The service failed and returned no result.")
+    this.name = "InternalServerError"
     this.detail = detail
   }
 }
@@ -420,10 +435,12 @@ async function handle(res: Response, route: string): Promise<unknown> {
     throw new ServiceUnavailableError(String(body.detail ?? "Service is not ready."))
   }
   if (res.status === 500) {
-    // ADDITIVITY_FAILURE_DETAIL: the explanation did not reconstruct the score,
-    // so the service refused to return a decision at all. A decision without a
-    // valid explanation is worse than no decision.
-    throw new AdditivityError(String(body.detail ?? "Internal consistency check failed."))
+    // Pass the service's own sentence through, or null if it sent none. The
+    // `??` that used to sit here substituted "Internal consistency check
+    // failed." for a MISSING detail, which turned every non-additivity 500 into
+    // a claim about the additivity guard. Absence of a detail is information;
+    // filling it in destroyed the one bit that distinguished the two shapes.
+    throw new InternalServerError(typeof body.detail === "string" ? body.detail : null)
   }
   throw new NetworkError(`Unexpected ${res.status} from the API.`)
 }

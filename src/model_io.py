@@ -311,7 +311,16 @@ def run_spw_ablation(splits: dict[str, pd.DataFrame], rounds: int | None = None)
             params["scale_pos_weight"] = (y_train == 0).sum() / (y_train == 1).sum()
         booster = lgb.train(params, dtrain_base, num_boost_round=rounds)
         p_val = booster.predict(X_val_lgb)
-        results[key] = {"auc": float(roc_auc_score(y_val, p_val)), "mean_pred": float(p_val.mean())}
+        # Booster.predict() is typed to cover every mode it has (raw_score,
+        # pred_leaf, pred_contrib, sparse input), so its return is a union that
+        # includes list. Under these params -- objective="binary" (LGB_PARAMS),
+        # a dense frame, and none of those flags -- it is always an ndarray, so
+        # .mean() is real. Nothing here can narrow the stub's union, and a cast
+        # would restate this paragraph without checking it.
+        results[key] = {
+            "auc": float(roc_auc_score(y_val, p_val)),
+            "mean_pred": float(p_val.mean()),  # type: ignore[union-attr]
+        }
         print(f"{tag:<14} Val AUC={results[key]['auc']:.4f}  "
               f"mean_pred={results[key]['mean_pred']:.4f}  actual={y_val.mean():.4f}")
 

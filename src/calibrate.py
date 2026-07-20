@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
@@ -180,7 +181,12 @@ def calibrate_model(
     iso.fit(p_calib_raw, y_calib)
     p_test_cal = apply_calibration(iso, p_test_raw)
 
-    metrics = {
+    # Annotated rather than inferred: the values are heterogeneous (one float
+    # beside two nested dicts), so mypy joins them to `object` and the
+    # metrics['raw']['brier'] reads below stop being indexable. This is the one
+    # place in this round where the type checker found something an annotation
+    # genuinely fixes, rather than a contract a runtime raise already holds.
+    metrics: dict[str, Any] = {
         "actual_test_default_rate": float(y_test.mean()),
         "raw": {
             "brier": float(brier_score_loss(y_test, p_test_raw)),

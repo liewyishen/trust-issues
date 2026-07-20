@@ -511,6 +511,14 @@ def explain_applicants(
             f"Got shap_values={hatch[0]}, base_value={hatch[1]}, p_cal={hatch[2]}."
         )
 
+    # base_value is `float | None` in the signature and is never None past this
+    # point, by either path: the hatch supplied it (the raise above is exactly
+    # what makes "some but not all" unreachable), or _shap_matrix assigns it
+    # below. mypy can follow neither -- `all(hatch)` is a bool over a tuple, not
+    # a narrowing -- so the three float(base_value) calls downstream carry
+    # `type: ignore[arg-type]` and point back here. The ValueError IS the guard.
+    # An assert would be a weaker second copy of it, and a cast would state the
+    # same conclusion while checking nothing.
     X = _x(df)                                  # label-free; never reads TARGET
     model_trained_at = calibrator_trained_at = None
 
@@ -552,7 +560,7 @@ def explain_applicants(
     # frame are the caller's, already in memory. See _assert_additivity.
     if all(hatch):
         _assert_additivity(
-            shap_values, float(base_value), tree_limit,
+            shap_values, float(base_value), tree_limit,  # type: ignore[arg-type]
             booster=booster, X_lgb=X_lgb,
         )
 
@@ -576,7 +584,7 @@ def explain_applicants(
     # Deriving p_raw as sigmoid(margin) is exact regardless of path: objective=
     # "binary" means Booster.predict() is precisely sigmoid of this quantity,
     # and tests/test_explain.py pins that identity to 0.0 absolute error.
-    margins = float(base_value) + shap_values.sum(axis=1)
+    margins = float(base_value) + shap_values.sum(axis=1)  # type: ignore[arg-type]
     p_raw = expit(margins)
 
     out = []
@@ -587,7 +595,7 @@ def explain_applicants(
             "p_calibrated": float(p_cal[i]),
             "threshold": float(threshold),
             "decision": "REJECT" if p_cal[i] >= threshold else "APPROVE",
-            "base_value_log_odds": float(base_value),
+            "base_value_log_odds": float(base_value),  # type: ignore[arg-type]
             "raw_margin_log_odds": float(margins[i]),
             "contributions_log_odds": {
                 f: float(s) for f, s in zip(FEATURES, shap_values[i])

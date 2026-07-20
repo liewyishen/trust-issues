@@ -95,7 +95,12 @@ def find_latest_run_id(run_name: str, experiment_name: str = EXPERIMENT_NAME) ->
             f"No MLflow run named {run_name!r} found in experiment "
             f"{experiment_name!r} -- did the train step run and set the experiment?"
         )
-    return str(runs.iloc[0]["run_id"])
+    # mlflow.search_runs() is typed as `DataFrame | list[Run]` because its
+    # output_format parameter switches between them. This call does not pass
+    # output_format, so it takes the default "pandas" and returns a DataFrame --
+    # which is also what the len() above and this .iloc read both assume. The
+    # stub cannot tie the return type to a defaulted argument.
+    return str(runs.iloc[0]["run_id"])  # type: ignore[union-attr]
 
 
 def log_metrics_to_run(run_id: str, metrics: dict[str, float]) -> None:

@@ -29,6 +29,7 @@ from serving.errors import (
     ARTIFACTS_UNAVAILABLE_DETAIL,
     BUREAU_UNAVAILABLE_DETAIL,
 )
+
 # serving/fairness.py opens a JSON file and compares one string. It imports
 # nothing from src/fairness.py, pipelines/ or scripts/ -- the audit itself needs
 # the assessment CSV and ~40s, and neither belongs anywhere near this process.
@@ -341,12 +342,20 @@ def create_app(
         comparison is against the bundle /score actually decides with, not a
         second read of the same pickle.
         """
+        # The three `type: ignore[arg-type]` below are all one fact: past this
+        # guard, audit.audit is not None. FairnessAudit.available (fairness.py)
+        # IS `self.audit is not None`, so the 404 above is what establishes it,
+        # and mypy cannot narrow an attribute through a property call. The
+        # runtime raise is the guard; the annotation stays honest about the
+        # unguarded type. Narrowing this with an assert would put a second,
+        # weaker check next to a 404 that already fails closed, and a cast
+        # would assert the same thing while checking nothing.
         if not audit.available:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=audit.unavailable_reason,
             )
-        if is_stale(audit.audit, bundle):
+        if is_stale(audit.audit, bundle):  # type: ignore[arg-type]
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
@@ -356,12 +365,14 @@ def create_app(
                         "report its ratios: they describe a booster that is not "
                         "making these decisions. Re-run scripts/audit_fairness.py."
                     ),
-                    "audit_model_trained_at": audit_model_trained_at(audit.audit),
+                    "audit_model_trained_at": audit_model_trained_at(
+                        audit.audit  # type: ignore[arg-type]
+                    ),
                     "shipped_model_trained_at": bundle.model_trained_at,
                 },
             )
         return FairnessResponse(
-            **audit.audit,
+            **audit.audit,  # type: ignore[arg-type]
             shipped_model_trained_at=bundle.model_trained_at,
         )
 

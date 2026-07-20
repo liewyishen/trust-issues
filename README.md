@@ -175,6 +175,12 @@ credit system.
 
 ![Serving flow](docs/architecture-serving.png)
 
+> **The PNG above lags its source as of 2026-07-20**, in one place: the `frontend/` box now reads
+> `computes NO number describing the applicant —` where the image still says `computes NO number of
+> its own —`. That claim was false — the browser computes the additivity sum and the calibrator
+> probe, both to *check* the service (`e65cfe9`) — and this was its third copy, after README's two.
+> Everything else in the image is current. Re-export with the page's own Export-as-PNG button.
+
 *[Interactive version](docs/architecture-serving.html) — same convention as the training diagram:
 every label cites the symbol it was verified under, and the page's Export-as-PNG button regenerates
 the image above.*

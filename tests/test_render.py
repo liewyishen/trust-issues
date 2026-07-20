@@ -82,6 +82,7 @@ from serving.render import (
     render_explanation,
 )
 from serving.schema import ScoredCreditReport, ScoreResponse
+from src.calibrate import DEFAULT_MODEL_PATH
 from src.data_validation import VALID_HOME_OWNERSHIP, VALID_PURPOSE
 from src.explain import CONTRIBUTION_SCALE
 from src.features import FEATURES
@@ -541,6 +542,12 @@ def test_scale_is_rendered_exactly_when_it_has_a_referent(approved):
     assert "log-odds margin" not in render_explanation(_with(approved, reason_codes=[]))
 
 
+# Same predicate and same reason string as test_serving.py's SHIPPED marker,
+# on purpose: one condition phrased twice is a second thing to keep in step.
+@pytest.mark.skipif(
+    not DEFAULT_MODEL_PATH.exists(),
+    reason="shipped model artifact absent (models/ is gitignored)",
+)
 def test_the_captured_payload_still_matches_a_live_score(approved):
     """
     APPROVED_PAYLOAD is hand-copied, which is the staleness shape this repo

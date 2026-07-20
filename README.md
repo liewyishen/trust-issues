@@ -175,12 +175,6 @@ credit system.
 
 ![Serving flow](docs/architecture-serving.png)
 
-> **The PNG above lags its source as of 2026-07-20**, in its two captions — header and footer.
-> Both now read `amended 2026-07-20 — … frontend box`; the image still says `amended 2026-07-19`
-> and names only the response box and the `/score` arrow, though `8e73d3a` changed the frontend
-> box too. Everything else in the image is current. Re-export with the page's own Export-as-PNG
-> button.
-
 *[Interactive version](docs/architecture-serving.html) — same convention as the training diagram:
 every label cites the symbol it was verified under, and the page's Export-as-PNG button regenerates
 the image above.*

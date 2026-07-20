@@ -229,6 +229,19 @@ decision, not a gap that nobody got to, and it is written here because an
 enforced-or-refused convention that lives only in someone's head is not a
 convention.
 
+That check is no longer something a person has to remember to type. The
+`frontend` job in `.github/workflows/ci.yml` runs `npm run build` on every pull
+request against `main` and every push to it, and the branch-protection rule on
+`main` requires it green before a merge, administrators included.
+
+One check this package does have and does not run: oxlint is in its
+`devDependencies`, `.oxlintrc.json` configures it with three plugins and two
+rules, and it exits 0 today. No npm script calls it, so neither CI nor a
+developer typing the usual commands ever does. Installed, configured, passing,
+and guarding nothing — recorded here because a linter visible in the dependency
+list is easy to mistake for a linter that runs. Wiring it up is its own change,
+not a line in this paragraph.
+
 **What is guarded, and where.** The rendered explanation is pinned on the Python
 side by 29 tests in `tests/test_render.py` (every feature has a phrase, the
 output contains every required fragment in order, no phrase asserts a cause) and

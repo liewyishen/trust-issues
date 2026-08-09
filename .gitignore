@@ -68,3 +68,4 @@ figures/*
 # OS
 .DS_Store
 Thumbs.db
+models_backup/

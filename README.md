@@ -107,6 +107,12 @@ never see. Full write-up in [`docs/data-decisions.md`](docs/data-decisions.md).
 
 ## Watch it work
 
+https://github.com/user-attachments/assets/f73c0f87-d283-426b-93f9-622137b3ea4d
+
+*In order: `pipelines/training_flow.py` running end to end with its leakage-gate output,
+`scripts/audit_fairness.py` re-running the three-layer fairness audit, and the frontend scoring one
+applicant against the live API.*
+
 The audits above are not screenshots in a write-up — there is a **live React frontend** talking to
 the **real FastAPI service**, and no number describing the applicant is computed in the browser. Fill in the form,
 and the decision that comes back is the shipped booster's, composed with the shipped calibrator, at
